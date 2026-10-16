@@ -30,6 +30,32 @@ jobs:
         run: gradle --no-daemon :app:testDebugUnitTest
       - name: Build APK without launching any device
         run: gradle --no-daemon :app:assembleDebug
+      - name: Build signed internal APK and AAB when signing secrets are configured
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        env:
+          FT_KEYSTORE_B64: ${{ secrets.FAMILY_TOUCH_KEYSTORE_B64 }}
+          FAMILY_TOUCH_KEYSTORE_PASSWORD: ${{ secrets.FAMILY_TOUCH_KEYSTORE_PASSWORD }}
+          FAMILY_TOUCH_KEY_PASSWORD: ${{ secrets.FAMILY_TOUCH_KEY_PASSWORD }}
+          FAMILY_TOUCH_KEY_ALIAS: ${{ secrets.FAMILY_TOUCH_KEY_ALIAS }}
+        run: |
+          if [ -z "$FT_KEYSTORE_B64" ] || [ -z "$FAMILY_TOUCH_KEYSTORE_PASSWORD" ] || [ -z "$FAMILY_TOUCH_KEY_ALIAS" ]; then
+            echo "Signing secrets not configured; no internal release build generated."
+            exit 0
+          fi
+          export FAMILY_TOUCH_KEYSTORE_FILE="$RUNNER_TEMP/familytouch-upload.p12"
+          printf '%s' "$FT_KEYSTORE_B64" | base64 -d > "$FAMILY_TOUCH_KEYSTORE_FILE"
+          chmod 600 "$FAMILY_TOUCH_KEYSTORE_FILE"
+          gradle --no-daemon :app:assembleRelease :app:bundleRelease
+          rm -f "$FAMILY_TOUCH_KEYSTORE_FILE"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: FamilyTouch-internal-signed
+          path: |
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/bundle/release/*.aab
+          if-no-files-found: ignore
+          retention-days: 14
       - uses: actions/upload-artifact@v4
         with:
           name: FamilyTouch-debug-apk
