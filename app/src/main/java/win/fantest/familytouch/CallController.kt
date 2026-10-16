@@ -50,6 +50,7 @@ object CallController {
     private var localRenderer: SurfaceViewRenderer? = null
     private var remoteRenderer: SurfaceViewRenderer? = null
     private var pendingIce = mutableListOf<IceCandidate>()
+    private val earlyIce = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.CopyOnWriteArrayList<IceCandidate>>()
     private var hasRemoteDescription = false
     private var currentPeer: Peer? = null
 
@@ -164,6 +165,7 @@ object CallController {
         val peer = FamilyStore.find(invitation.peerId) ?: return
         try {
             prepare(peer, invitation.isVideo)
+            pendingIce.addAll(earlyIce.remove(peer.id).orEmpty())
             FamilyStore.activeCall = invitation.copy(outgoing = false)
             FamilyStore.incomingCall = null
             setRemote(SessionDescription(SessionDescription.Type.OFFER, invitation.offer)) {
@@ -218,9 +220,13 @@ object CallController {
             "answer" -> if (currentPeer?.id == peerId && ready) {
                 setRemote(SessionDescription(SessionDescription.Type.ANSWER, data.getString("sdp")))
             }
-            "ice" -> if (currentPeer?.id == peerId && ready) {
+            "ice" -> {
                 val candidate = IceCandidate(data.optString("mid"), data.getInt("mLine"), data.getString("candidate"))
-                if (hasRemoteDescription) connection?.addIceCandidate(candidate) else pendingIce.add(candidate)
+                if (currentPeer?.id == peerId && ready) {
+                    if (hasRemoteDescription) connection?.addIceCandidate(candidate) else pendingIce.add(candidate)
+                } else {
+                    earlyIce.getOrPut(peerId) { java.util.concurrent.CopyOnWriteArrayList() }.add(candidate)
+                }
             }
             "hangup" -> if (currentPeer?.id == peerId || FamilyStore.incomingCall?.peerId == peerId) clear(false)
         }
