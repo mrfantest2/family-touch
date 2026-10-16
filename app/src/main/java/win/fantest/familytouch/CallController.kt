@@ -12,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import java.util.UUID
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
 import org.webrtc.Camera2Enumerator
@@ -59,6 +60,29 @@ object CallController {
     private val earlyIce = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.CopyOnWriteArrayList<IceCandidate>>()
     private var hasRemoteDescription = false
     private var currentPeer: Peer? = null
+    var connectedSinceMs by mutableStateOf<Long?>(null)
+        private set
+    private var callStartedMs: Long = 0L
+    private var wasOutgoing = false
+    private var wasVideo = false
+
+    private fun beginLog(video: Boolean, outgoing: Boolean) {
+        callStartedMs = System.currentTimeMillis()
+        connectedSinceMs = null
+        wasOutgoing = outgoing
+        wasVideo = video
+    }
+
+    private fun recordFinish() {
+        val peer = currentPeer ?: return
+        if (callStartedMs <= 0L) return
+        FamilyStore.addCallLog(CallLogRecord(UUID.randomUUID().toString(), peer.id,
+            wasVideo, wasOutgoing, callStartedMs, connectedSinceMs ?: 0L,
+            System.currentTimeMillis(), if (connectedSinceMs != null) "completed"
+            else if (wasOutgoing) "unanswered" else "declined"))
+        callStartedMs = 0L
+        connectedSinceMs = null
+    }
     private var audioManager: AudioManager? = null
     private var previousAudioMode: Int? = null
     private var previousSpeakerphone = false
@@ -154,6 +178,11 @@ object CallController {
         connection = factory.createPeerConnection(config, object : PeerConnection.Observer {
             override fun onSignalingChange(state: PeerConnection.SignalingState?) {}
             override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) {
+                if ((state == PeerConnection.IceConnectionState.CONNECTED ||
+                    state == PeerConnection.IceConnectionState.COMPLETED) &&
+                    !closing && connectedSinceMs == null) {
+                    connectedSinceMs = System.currentTimeMillis()
+                }
                 if (state == PeerConnection.IceConnectionState.FAILED && !closing && FamilyStore.activeCall != null) {
                     FamilyStore.lastError = "Call network interrupted. Confirm both devices are connected to Tailscale."
                 }
@@ -208,6 +237,7 @@ object CallController {
     fun start(peer: Peer, video: Boolean) {
         try {
             prepare(peer, video)
+            beginLog(video, true)
             FamilyStore.activeCall = CallInvite(peer.id, video, outgoing = true)
             connection?.createOffer(object : SdpObserver {
                 override fun onCreateSuccess(sdp: SessionDescription?) {
@@ -226,7 +256,9 @@ object CallController {
         val invitation = FamilyStore.incomingCall ?: return
         val peer = FamilyStore.find(invitation.peerId) ?: return
         try {
+            RingtonePlayer.stop()
             prepare(peer, invitation.isVideo)
+            beginLog(invitation.isVideo, false)
             pendingIce.addAll(earlyIce.remove(peer.id).orEmpty())
             FamilyStore.activeCall = invitation.copy(outgoing = false)
             FamilyStore.incomingCall = null
@@ -274,7 +306,7 @@ object CallController {
     fun receive(type: String, peerId: String, data: JSONObject, alert: (String) -> Unit) {
         when (type) {
             "offer" -> {
-                if (FamilyStore.activeCall != null) return
+                if (FamilyStore.activeCall != null || FamilyStore.incomingCall != null) return
                 val peer = FamilyStore.find(peerId) ?: return
                 FamilyStore.incomingCall = CallInvite(peerId, data.optBoolean("video"), data.getString("sdp"))
                 alert(peer.name + " is calling")
@@ -290,11 +322,22 @@ object CallController {
                     earlyIce.getOrPut(peerId) { java.util.concurrent.CopyOnWriteArrayList() }.add(candidate)
                 }
             }
-            "hangup" -> if (currentPeer?.id == peerId || FamilyStore.incomingCall?.peerId == peerId) clear(false)
+            "hangup" -> {
+                if (FamilyStore.incomingCall?.peerId == peerId && FamilyStore.activeCall == null) {
+                    FamilyStore.addCallLog(CallLogRecord(UUID.randomUUID().toString(), peerId,
+                        FamilyStore.incomingCall!!.isVideo, false, System.currentTimeMillis(),
+                        0L, System.currentTimeMillis(), "missed"))
+                }
+                if (currentPeer?.id == peerId || FamilyStore.incomingCall?.peerId == peerId) clear(false)
+            }
         }
     }
 
     fun hangup() {
+        if (currentPeer == null) FamilyStore.incomingCall?.let {
+            FamilyStore.addCallLog(CallLogRecord(UUID.randomUUID().toString(),
+                it.peerId,it.isVideo,false,System.currentTimeMillis(),0L,System.currentTimeMillis(),"declined"))
+        }
         currentPeer?.let { signal("hangup", JSONObject()) }
         if (currentPeer == null) FamilyStore.incomingCall?.peerId?.let { id ->
             FamilyStore.find(id)?.let { peer ->
@@ -306,6 +349,11 @@ object CallController {
 
     private fun clear(notify: Boolean) {
         closing = true
+        RingtonePlayer.stop()
+        if (::context.isInitialized) {
+            (context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager).cancel(41)
+        }
+        recordFinish()
         if (notify) currentPeer?.let { signal("hangup", JSONObject()) }
         try { camera?.stopCapture() } catch (_: Exception) {}
         camera?.dispose(); camera = null
@@ -322,6 +370,7 @@ object CallController {
         currentPeer = null
         hasRemoteDescription = false
         pendingIce.clear()
+        connectedSinceMs = null
         FamilyStore.activeCall = null
         FamilyStore.incomingCall = null
     }

@@ -5,6 +5,15 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.graphics.BitmapFactory
+import android.graphics.Bitmap
+import android.util.Base64
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import android.location.LocationManager
+import androidx.activity.compose.rememberLauncherForActivityResult
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -36,9 +45,14 @@ import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Videocam
+import androidx.compose.material.icons.outlined.LocationOn
+import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.delay
+import java.text.DateFormat
+import java.util.Date
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -55,6 +69,8 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 import org.webrtc.SurfaceViewRenderer
 import java.util.UUID
+import java.util.Locale
+import java.io.ByteArrayOutputStream
 
 private val bg = Color(0xFF071424)
 private val surface = Color(0xFF0E2339)
@@ -63,6 +79,9 @@ private val ink = Color(0xFFE8F3FE)
 private val muted = Color(0xFF9DAFBE)
 
 class MainActivity : ComponentActivity() {
+    override fun onStart() { super.onStart(); FamilyStore.appVisible = true }
+    override fun onStop() { FamilyStore.appVisible = false; super.onStop() }
+
     private val askPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {}
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -218,18 +237,66 @@ private fun ChatsPage(peers: List<Peer>, onOpen: (String) -> Unit) {
 
 @Composable
 private fun CallsPage(peers: List<Peer>, onCall: (Peer, Boolean) -> Unit) {
-    if (peers.isEmpty()) EmptyState("No contacts yet", "Pair your family's devices to make private calls.")
-    else LazyColumn {
-        items(peers, key = { it.id }) { peer ->
-            Row(Modifier.fillMaxWidth().padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
-                Avatar(peer.name)
+    val log = FamilyStore.callHistory.toList()
+    LazyColumn(contentPadding = PaddingValues(bottom = 14.dp)) {
+        item {
+            Text("Start a call", Modifier.padding(start = 18.dp, top = 16.dp, bottom = 8.dp),
+                fontWeight = FontWeight.Bold, fontSize = 18.sp)
+        }
+        if (peers.isEmpty()) item {
+            Text("Pair a family device to call privately.", Modifier.padding(18.dp), color = muted)
+        }
+        items(peers, key = { "contact-" + it.id }) { peer ->
+            Row(Modifier.fillMaxWidth().padding(horizontal = 15.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Avatar(peer.name, FamilyStore.peerPhotos[peer.id])
                 Spacer(Modifier.width(14.dp))
                 Text(peer.name, Modifier.weight(1f), fontWeight = FontWeight.Medium)
-                IconButton(onClick = { onCall(peer, false) }) { Icon(Icons.Outlined.Call, "Voice call", tint = Color(0xFF54DDA6)) }
-                IconButton(onClick = { onCall(peer, true) }) { Icon(Icons.Outlined.Videocam, "Video call", tint = accent) }
+                IconButton(onClick = { onCall(peer, false) }) {
+                    Icon(Icons.Outlined.Call, "Voice call", tint = Color(0xFF54DDA6))
+                }
+                IconButton(onClick = { onCall(peer, true) }) {
+                    Icon(Icons.Outlined.Videocam, "Video call", tint = accent)
+                }
             }
         }
+        item {
+            HorizontalDivider(color = Color(0xFF24415C))
+            Text("Call history", Modifier.padding(start = 18.dp, top = 14.dp, bottom = 10.dp),
+                fontWeight = FontWeight.Bold, fontSize = 18.sp)
+        }
+        if (log.isEmpty()) item {
+            Text("No calls recorded yet. Call time, direction and duration will appear here.",
+                Modifier.padding(18.dp), color = muted)
+        }
+        items(log, key = { "call-" + it.id }) { entry ->
+            val peer = FamilyStore.find(entry.peerId)
+            Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Icon(if (entry.isVideo) Icons.Outlined.Videocam else Icons.Outlined.Call,
+                    null, tint = if (entry.outcome == "missed") Color(0xFFFF9090) else accent)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(peer?.name ?: "Family device", fontWeight = FontWeight.Medium)
+                    Text((if (entry.outgoing) "Outgoing" else "Incoming") +
+                        " · " + entry.outcome.replaceFirstChar { it.uppercase() } +
+                        " · " + durationText(entry.durationMs),
+                        color = muted, fontSize = 12.sp)
+                    Text(DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
+                        .format(Date(entry.startedAt)), color = muted, fontSize = 11.sp)
+                }
+                if (peer != null) IconButton(onClick = { onCall(peer, entry.isVideo) }) {
+                    Icon(Icons.Outlined.Call, "Call again")
+                }
+            }
+            HorizontalDivider(color = Color(0xFF152B40), thickness = 0.5.dp)
+        }
     }
+}
+
+private fun durationText(ms: Long): String {
+    val seconds = ms.coerceAtLeast(0L) / 1000L
+    return "%02d:%02d:%02d".format(seconds / 3600L, (seconds / 60L) % 60L, seconds % 60L)
 }
 
 @Composable
@@ -251,19 +318,32 @@ private fun ContactsPage(peers: List<Peer>, onOpen: (String) -> Unit, onPair: ()
 private fun PeerRow(peer: Peer, subtitle: String, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 19.dp, vertical = 15.dp),
         verticalAlignment = Alignment.CenterVertically) {
-        Avatar(peer.name); Spacer(Modifier.width(14.dp))
+        Avatar(peer.name, FamilyStore.peerPhotos[peer.id]); Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(peer.name, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
-            Text(subtitle, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp)
+            Text(FamilyStore.presenceLabel(peer.id) + " · " + subtitle, color = muted,
+                maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp)
         }
     }
     HorizontalDivider(color = Color(0xFF152B40), thickness = 0.5.dp)
 }
 
 @Composable
-private fun Avatar(name: String) {
-    Box(Modifier.size(48.dp).background(Color(0xFF164674), CircleShape), contentAlignment = Alignment.Center) {
-        Text(name.take(1).uppercase(), fontWeight = FontWeight.Bold, fontSize = 21.sp, color = Color.White)
+private fun Avatar(name: String, photo: String? = null) {
+    val decoded = remember(photo) {
+        try {
+            if (photo.isNullOrEmpty()) null else {
+                val bytes = Base64.decode(photo, Base64.DEFAULT)
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+            }
+        } catch (_: Exception) { null }
+    }
+    Box(Modifier.size(48.dp).background(Color(0xFF164674), CircleShape),
+        contentAlignment = Alignment.Center) {
+        if (decoded != null) Image(decoded, "Profile image", Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop)
+        else Text(name.take(1).uppercase(), fontWeight = FontWeight.Bold,
+            fontSize = 21.sp, color = Color.White)
     }
 }
 
@@ -283,6 +363,87 @@ private fun EmptyState(title: String, subtitle: String) {
 private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
     val scope = rememberCoroutineScope()
     var draft by remember(peer.id) { mutableStateOf("") }
+    val context = LocalContext.current
+    var locationPreview by remember { mutableStateOf<String?>(null) }
+    var locationBusy by remember { mutableStateOf(false) }
+    var sendingMedia by remember { mutableStateOf(false) }
+    val selectMedia = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.size > AttachmentTransport.MAX_BATCH)
+            FamilyStore.lastError = "Choose at most 10 photos or videos per batch"
+        else if (uris.isNotEmpty()) {
+            sendingMedia = true
+            scope.launch {
+                try {
+                    AttachmentTransport.send(context, peer, uris) { item ->
+                        FamilyStore.addChat(item)
+                    }
+                } catch (e: Exception) {
+                    FamilyStore.lastError = "Attachment transfer failed: " + e.message
+                } finally { sendingMedia = false }
+            }
+        }
+    }
+
+    val sendChat: (String) -> Unit = { message ->
+        val text = message.trim()
+        if (text.isNotEmpty()) {
+            val id = UUID.randomUUID().toString()
+            FamilyStore.addChat(ChatItem(id, peer.id, true, text, System.currentTimeMillis(), false))
+            scope.launch {
+                try {
+                    Tailnet.send(peer, "message", JSONObject().put("text", text).put("messageId", id))
+                    FamilyStore.delivered(id)
+                } catch (e: Exception) {
+                    FamilyStore.lastError = "Message not delivered: " + e.message
+                }
+            }
+        }
+    }
+    val requestLocation: () -> Unit = {
+        locationBusy = true
+        try {
+            val manager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            val provider = if (manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER))
+                LocationManager.NETWORK_PROVIDER else LocationManager.GPS_PROVIDER
+            if (Build.VERSION.SDK_INT >= 30) {
+                manager.getCurrentLocation(provider, null, context.mainExecutor) { loc ->
+                    locationBusy = false
+                    if (loc == null) FamilyStore.lastError = "Could not obtain a location. Enable Location in Android settings."
+                    else locationPreview = "https://www.google.com/maps?q=" +
+                        String.format(Locale.US, "%.6f,%.6f", loc.latitude, loc.longitude)
+                }
+            } else {
+                val last = manager.getLastKnownLocation(provider)
+                locationBusy = false
+                if (last != null && System.currentTimeMillis() - last.time < 120000L)
+                    locationPreview = "https://www.google.com/maps?q=" +
+                        String.format(Locale.US, "%.6f,%.6f", last.latitude, last.longitude)
+                else FamilyStore.lastError = "No recent location available; enable device Location."
+            }
+        } catch (e: Exception) {
+            locationBusy = false
+            FamilyStore.lastError = "Location unavailable: " + e.message
+        }
+    }
+    val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        if (it) requestLocation() else FamilyStore.lastError = "Location permission was declined."
+    }
+
+    if (locationPreview != null) {
+        AlertDialog(onDismissRequest = { locationPreview = null },
+            title = { Text("Share your location?") },
+            text = { Text("Send this one-time map location to " + peer.name +
+                "? It will remain in the chat history. This does not enable live tracking.") },
+            confirmButton = {
+                Button(onClick = {
+                    locationPreview?.let { url -> sendChat("Location: " + url) }
+                    locationPreview = null
+                }) { Text("Send location") }
+            }, dismissButton = {
+                TextButton(onClick = { locationPreview = null }) { Text("Cancel") }
+            })
+    }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(10.dp), horizontalArrangement = Arrangement.End) {
             IconButton(onClick = { onCall(false) }) { Icon(Icons.Outlined.Call, "Voice call", tint = Color(0xFF54DDA6)) }
@@ -295,7 +456,32 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = if (msg.outgoing) Arrangement.End else Arrangement.Start) {
                     Column(Modifier.widthIn(max = 300.dp).background(if (msg.outgoing) Color(0xFF1268AE) else surface,
                         RoundedCornerShape(16.dp)).padding(horizontal = 15.dp, vertical = 11.dp)) {
-                        Text(msg.text, color = Color.White)
+                        val attachment = AttachmentTransport.parse(msg.text)
+                        if (attachment != null) {
+                            Text((if (attachment.mime.startsWith("image/")) "Photo" else "Video") +
+                                " · " + attachment.name, color = Color.White, maxLines = 2)
+                            Text(((attachment.size + 1023) / 1024).toString() + " KB",
+                                fontSize = 11.sp, color = Color(0xFFBFDBEF))
+                            Text("Tap to open attachment", color = Color(0xFFACE1FF),
+                                modifier = Modifier.clickable {
+                                    try { AttachmentTransport.open(context, attachment) }
+                                    catch (e: Exception) { FamilyStore.lastError =
+                                        "Cannot open attachment: " + e.message }
+                                })
+                        } else if (msg.text.startsWith("Location: https://www.google.com/maps?q=")) {
+                            Text("Shared location", color = Color.White)
+                            Text("Open in Maps", color = Color(0xFFACE1FF),
+                                modifier = Modifier.clickable {
+                                    try {
+                                        context.startActivity(Intent(Intent.ACTION_VIEW,
+                                            Uri.parse(msg.text.removePrefix("Location: "))))
+                                    } catch (_: Exception) {
+                                        FamilyStore.lastError = "No maps app or browser available"
+                                    }
+                                })
+                        } else Text(msg.text, color = Color.White)
+                        Text(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(msg.time)),
+                            color = Color(0xFFBFDBEF), fontSize = 10.sp)
                         if (msg.outgoing) Text(if (msg.delivered) "Delivered" else "Not delivered",
                             color = Color(0xFFBFDBEF), fontSize = 10.sp)
                     }
@@ -304,6 +490,17 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
         }
         Row(Modifier.fillMaxWidth().background(Color(0xFF0D2135)).padding(10.dp),
             verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = { selectMedia.launch(arrayOf("image/*", "video/*")) },
+                enabled = !sendingMedia) {
+                Icon(Icons.Outlined.AttachFile, "Attach up to 10 photos or videos", tint = accent)
+            }
+            IconButton(onClick = {
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+                    PackageManager.PERMISSION_GRANTED) requestLocation()
+                else locationPermission.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+            }, enabled = !locationBusy) {
+                Icon(Icons.Outlined.LocationOn, "Share one-time location", tint = accent)
+            }
             OutlinedTextField(value = draft, onValueChange = { draft = it.take(6000) },
                 modifier = Modifier.weight(1f), placeholder = { Text("Message") },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
@@ -313,14 +510,7 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
             FilledIconButton(enabled = draft.isNotBlank(), onClick = {
                 val text = draft.trim()
                 draft = ""
-                val id = UUID.randomUUID().toString()
-                FamilyStore.addChat(ChatItem(id, peer.id, true, text, System.currentTimeMillis(), false))
-                scope.launch {
-                    try {
-                        Tailnet.send(peer, "message", JSONObject().put("text", text).put("messageId", id))
-                        FamilyStore.delivered(id)
-                    } catch (e: Exception) { FamilyStore.lastError = "Message not delivered: " + e.message }
-                }
+                sendChat(text)
             }) { Icon(Icons.Outlined.Send, "Send") }
         }
     }
@@ -330,9 +520,48 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
 private fun SettingsPage(ip: String?, onRefresh: () -> Unit) {
     val context = LocalContext.current
     var name by remember { mutableStateOf(FamilyStore.nickname) }
+    val scope = rememberCoroutineScope()
+    val pickAvatar = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) try {
+            val source = context.contentResolver.openInputStream(uri)?.use { input ->
+                BitmapFactory.decodeStream(input, null, BitmapFactory.Options().apply { inSampleSize = 4 })
+            }
+            if (source == null) FamilyStore.lastError = "Unable to open picture"
+            else {
+                val thumbnail = Bitmap.createScaledBitmap(source, 128, 128, true)
+                val out = ByteArrayOutputStream()
+                var quality = 85
+                do {
+                    out.reset()
+                    thumbnail.compress(Bitmap.CompressFormat.JPEG, quality, out)
+                    quality -= 10
+                } while (out.size() > 16000 && quality >= 20)
+                source.recycle()
+                if (thumbnail !== source) thumbnail.recycle()
+                if (out.size() > 16000) FamilyStore.lastError = "Picture is too complex to share"
+                else {
+                    val encoded = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+                    FamilyStore.updateProfilePhoto(encoded)
+                    scope.launch {
+                        FamilyStore.contacts.forEach { peer ->
+                            try { Tailnet.send(peer, "profile_update", JSONObject().put("avatar", encoded)) }
+                            catch (_: Exception) { }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) { FamilyStore.lastError = "Picture selection failed: " + e.message }
+    }
     val code = Tailnet.invitation(context)
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(17.dp)) {
         Text("Your device", fontSize = 21.sp, fontWeight = FontWeight.Bold)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Avatar(FamilyStore.nickname, FamilyStore.profilePhoto)
+            Spacer(Modifier.width(12.dp))
+            OutlinedButton(onClick = { pickAvatar.launch("image/*") }) {
+                Text("Change profile picture")
+            }
+        }
         OutlinedTextField(value = name, onValueChange = { name = it.take(36) },
             label = { Text("Nickname") }, modifier = Modifier.fillMaxWidth(),
             trailingIcon = { IconButton(onClick = { FamilyStore.rename(name) }) {
@@ -389,6 +618,12 @@ private fun CallControls(onHangup: () -> Unit, modifier: Modifier = Modifier) {
 @Composable
 private fun CallPage(call: CallInvite, onHangup: () -> Unit) {
     val name = FamilyStore.find(call.peerId)?.name ?: "Family device"
+    var clock by remember(call.peerId) { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(call.peerId) {
+        while (true) { delay(1000); clock = System.currentTimeMillis() }
+    }
+    val connectedAt = CallController.connectedSinceMs
+    val timer = if (connectedAt == null) "Connecting..." else durationText(clock - connectedAt)
     if (call.isVideo) {
         val context = LocalContext.current
         val local = remember { SurfaceViewRenderer(context) }
@@ -409,8 +644,10 @@ private fun CallPage(call: CallInvite, onHangup: () -> Unit) {
             AndroidView(factory = { remote }, modifier = Modifier.fillMaxSize())
             AndroidView(factory = { local }, modifier = Modifier.align(Alignment.TopEnd).padding(18.dp)
                 .width(110.dp).height(155.dp))
-            Text(name, Modifier.align(Alignment.TopStart).padding(20.dp), fontSize = 20.sp,
-                fontWeight = FontWeight.SemiBold)
+            Column(Modifier.align(Alignment.TopStart).padding(20.dp)) {
+                Text(name, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                Text(timer, fontSize = 15.sp, color = Color.White)
+            }
             CallControls(onHangup, Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp))
         }
     } else {
@@ -420,6 +657,8 @@ private fun CallPage(call: CallInvite, onHangup: () -> Unit) {
             Spacer(Modifier.height(20.dp))
             Text(name, fontWeight = FontWeight.Bold, fontSize = 27.sp)
             Text("Private Tailscale voice call", color = muted, fontSize = 13.sp)
+            Spacer(Modifier.height(8.dp))
+            Text(timer, fontSize = 20.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.height(55.dp))
             CallControls(onHangup)
         }

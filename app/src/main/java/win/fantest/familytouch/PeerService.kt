@@ -27,23 +27,62 @@ class PeerService : Service() {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var listener: ServerSocket? = null
     private var listenJob: Job? = null
-    private val channel = "familytouch_peer"
+    private val channel = "familytouch_status_silent_v3"
+    private val messageChannel = "familytouch_messages_v3"
+    private val callChannel = "familytouch_calls_v3"
 
     override fun onCreate() {
         super.onCreate()
         FamilyStore.init(this)
         Tailnet.init(this)
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        nm.createNotificationChannel(NotificationChannel(channel, "Family Touch connections", NotificationManager.IMPORTANCE_DEFAULT))
-        nm.createNotificationChannel(NotificationChannel("familytouch_calls", "Incoming Family Touch calls", NotificationManager.IMPORTANCE_HIGH))
+        nm.createNotificationChannel(NotificationChannel(channel, "Family Touch background connection",
+            NotificationManager.IMPORTANCE_LOW).apply {
+            setSound(null, null); enableVibration(false); setShowBadge(false)
+        })
+        nm.createNotificationChannel(NotificationChannel(messageChannel, "Family Touch messages",
+            NotificationManager.IMPORTANCE_DEFAULT))
+        nm.createNotificationChannel(NotificationChannel(callChannel, "Family Touch incoming calls",
+            NotificationManager.IMPORTANCE_HIGH).apply {
+            setSound(null,null); enableVibration(false)
+        })
         val notification = connectionNotification()
         if (Build.VERSION.SDK_INT >= 34)
             startForeground(40, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING)
         else startForeground(40, notification)
         scope.launch {
+            var wasConnected = Tailnet.vpnIp(this@PeerService) != null
             while (isActive) {
-                delay(20_000)
-                nm.notify(40, connectionNotification())
+                delay(60_000)
+                val connected = Tailnet.vpnIp(this@PeerService) != null
+                if (wasConnected != connected) {
+                    wasConnected = connected
+                    nm.notify(40, connectionNotification())
+                }
+            }
+        }
+        scope.launch {
+            while (isActive) {
+                val contacts = FamilyStore.contacts.toList()
+                for (peer in contacts) {
+                    FamilyStore.peerPresence[peer.id] = try {
+                        Tailnet.send(peer, "presence").optString("status", "away")
+                    } catch (_: Exception) { "offline" }
+                }
+                delay(45_000L)
+            }
+        }
+        scope.launch {
+            while (isActive) {
+                for (peer in FamilyStore.contacts.toList()) {
+                    try {
+                        val result = Tailnet.send(peer, "profile_get")
+                        val encoded = result.optString("avatar")
+                        if (encoded.isNotEmpty() && FamilyStore.peerPhotos[peer.id] != encoded)
+                            FamilyStore.setPeerPhoto(peer.id, encoded)
+                    } catch (_: Exception) { }
+                }
+                delay(300_000L)
             }
         }
         listenJob = scope.launch {
@@ -80,13 +119,15 @@ class PeerService : Service() {
 
     private fun showNotification(title: String, text: String, call: Boolean = false) {
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        val c = if (call) "familytouch_calls" else channel
+        val c = if (call) callChannel else messageChannel
         val builder = NotificationCompat.Builder(this, c).setSmallIcon(android.R.drawable.stat_notify_chat)
             .setContentTitle(title).setContentText(text).setContentIntent(openApp()).setAutoCancel(true)
         if (call) {
             builder.setCategory(NotificationCompat.CATEGORY_CALL).setPriority(NotificationCompat.PRIORITY_HIGH)
         }
-        nm.notify((System.currentTimeMillis() % 100000).toInt() + 100, builder.build())
+        nm.notify(if (call) 41 else ((System.currentTimeMillis() % 100000).toInt() + 100),
+            builder.build())
+        if (call) RingtonePlayer.start(this)
     }
 
     private suspend fun handle(socket: Socket) {
@@ -96,7 +137,8 @@ class PeerService : Service() {
                 val ip = s.inetAddress.hostAddress.orEmpty()
                 require(Tailnet.isTailIp(ip)) { "Tailscale peers only" }
                 check(Tailnet.vpnIp(this@PeerService) != null) { "Connect Tailscale before accepting peer traffic" }
-                val line = Tailnet.readWireLine(s.getInputStream().buffered())
+                val input = s.getInputStream().buffered()
+                val line = Tailnet.readWireLine(input)
                 val json = JSONObject(line)
                 val id = json.getString("id")
                 val type = json.getString("type")
@@ -115,12 +157,35 @@ class PeerService : Service() {
                         FamilyStore.upsert(peer.copy(ip = ip, name = json.optString("nick", peer.name).take(36)))
                     }
                     when (type) {
+                        "attachment" -> {
+                            s.soTimeout = 90_000
+                            val item = AttachmentTransport.receive(this@PeerService, input, json, id)
+                            if (FamilyStore.messages.none { it.id == item.id }) {
+                                FamilyStore.addChat(item)
+                                showNotification(json.optString("nick", "Family Touch"),
+                                    if (item.text.contains("|image/")) "Sent a photo" else "Sent a video")
+                            }
+                            JSONObject()
+                        }
+                        "profile_get" -> JSONObject().put("avatar", FamilyStore.profilePhoto)
+                        "profile_update" -> {
+                            FamilyStore.setPeerPhoto(id, json.optString("avatar"))
+                            JSONObject()
+                        }
+                        "presence" -> JSONObject().put("status", when {
+                            FamilyStore.activeCall != null -> "on_call"
+                            FamilyStore.appVisible -> "available"
+                            else -> "away"
+                        })
                         "message" -> {
                             val txt = json.getString("text").take(6000)
                             val messageId = json.getString("messageId")
                             require(txt.isNotBlank() && messageId.length in 8..100) { "Invalid message" }
-                            FamilyStore.addChat(ChatItem(messageId, id, false, txt, System.currentTimeMillis(), true))
-                            showNotification(json.optString("nick", "Family Touch"), txt.take(100))
+                            val exists = FamilyStore.messages.any { it.id == messageId }
+                            if (!exists) {
+                                FamilyStore.addChat(ChatItem(messageId, id, false, txt, System.currentTimeMillis(), true))
+                                showNotification(json.optString("nick", "Family Touch"), txt.take(100))
+                            }
                         }
                         "offer", "answer", "ice", "hangup" -> CallController.receive(type, id, json) { who ->
                             showNotification("Incoming Family Touch call", who, true)
@@ -143,6 +208,7 @@ class PeerService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
     override fun onDestroy() {
+        RingtonePlayer.stop()
         listener?.close()
         listenJob?.cancel()
         scope.cancel()
