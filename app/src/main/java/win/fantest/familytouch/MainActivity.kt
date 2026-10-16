@@ -87,6 +87,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         FamilyStore.init(this)
         Tailnet.init(this)
+        if (getSharedPreferences("vpn", Context.MODE_PRIVATE).getBoolean("enabled", false) && android.net.VpnService.prepare(this) == null) {
+            ContextCompat.startForegroundService(this, Intent(this, FamilyVpnService::class.java))
+        }
         CallController.init(this)
         try { ContextCompat.startForegroundService(this, Intent(this, PeerService::class.java)) }
         catch (ex: Exception) { FamilyStore.lastError = "Service: " + ex.message }
@@ -120,7 +123,7 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean) {
     val incoming = FamilyStore.incomingCall
     val active = FamilyStore.activeCall
 
-    LaunchedEffect(Unit) { ip.value = Tailnet.vpnIp(context) }
+    LaunchedEffect(Unit) { while (true) { ip.value = Tailnet.vpnIp(context); delay(1000) } }
     Column(Modifier.fillMaxSize().background(bg).statusBarsPadding().navigationBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 18.dp, bottom = 14.dp),
             verticalAlignment = Alignment.CenterVertically) {
@@ -132,7 +135,7 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean) {
             }
             Column(Modifier.weight(1f)) {
                 Text(selectedPeer?.name ?: "Family Touch", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                Text(if (ip.value != null) "Private Tailscale network" else "Connect Tailscale to start",
+                Text(if (ip.value != null) "Private Tailscale network" else "Connect private network in Settings",
                     fontSize = 12.sp, color = if (ip.value != null) Color(0xFF5DDAA7) else Color(0xFFFFC466))
             }
             IconButton(onClick = { ip.value = Tailnet.vpnIp(context) }) { Icon(Icons.Outlined.Wifi, "Refresh Tailscale") }
@@ -570,8 +573,8 @@ private fun SettingsPage(ip: String?, onRefresh: () -> Unit) {
         Text("Your identity is created automatically when this app is first installed. No account or password required.",
             color = muted, fontSize = 12.sp)
         HorizontalDivider(color = Color(0xFF24415C))
-        Text("Tailscale", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-        Text(if (ip != null) "Connected privately • " + ip else "Not connected — open the Tailscale app and sign in.",
+        VpnSettings()
+        Text(if (ip != null) "Connected privately • " + ip else "Private network disconnected",
             color = if (ip != null) Color(0xFF5DDAA7) else Color(0xFFFFBD76))
         OutlinedButton(onClick = onRefresh) { Icon(Icons.Outlined.Wifi, null); Spacer(Modifier.width(6.dp)); Text("Refresh connection") }
         HorizontalDivider(color = Color(0xFF24415C))

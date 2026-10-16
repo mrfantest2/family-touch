@@ -11,8 +11,8 @@ android {
         applicationId = "win.fantest.familytouch"
         minSdk = 29
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.1.0-alpha05"
+        versionCode = 7
+        versionName = "0.1.0-embedded02"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["familyTouchAppLabel"] = "Family Touch"
     }
@@ -49,6 +49,8 @@ android {
 }
 
 dependencies {
+    implementation(files("libs/libtailscale.aar"))
+    implementation("androidx.security:security-crypto:1.1.0")
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)
     implementation("androidx.activity:activity-compose:1.9.3")

@@ -1,7 +1,7 @@
 name: Android validation
 on:
   push:
-    branches: [main]
+    branches: [main, feature/embedded-tailscale]
   pull_request:
     branches: [main]
   workflow_dispatch:
