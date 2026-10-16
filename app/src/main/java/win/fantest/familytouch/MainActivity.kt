@@ -151,7 +151,7 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean) {
 
     if (incoming != null && active == null) {
         val peerName = FamilyStore.find(incoming.peerId)?.name ?: "Family device"
-        AlertDialog(onDismissRequest = {}, title = { Text("Incoming " + if (incoming.isVideo) "video" else "voice" + " call") },
+        AlertDialog(onDismissRequest = {}, title = { Text("Incoming " + (if (incoming.isVideo) "video" else "voice") + " call") },
             text = { Text(peerName + " is calling over your private Tailscale network.") },
             confirmButton = {
                 Button(onClick = { if (askCallPermissions(incoming.isVideo)) CallController.accept() }) { Text("Answer") }
