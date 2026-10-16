@@ -14,6 +14,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -73,7 +75,7 @@ class MainActivity : ComponentActivity() {
             askPermissions.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS))
         setContent {
             MaterialTheme(colorScheme = darkColorScheme(
-                primary = accent, background = bg, surface = surface, onBackground = ink, onSurface = ink
+                primary = accent, onPrimary = Color.White, background = bg, surface = surface, onBackground = ink, onSurface = ink
             )) { Surface(modifier = Modifier.fillMaxSize(), color = bg, contentColor = ink) { FamilyTouchUI(askCallPermissions = { video ->
                 val permissions = if (video) arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
                     else arrayOf(Manifest.permission.RECORD_AUDIO)
@@ -329,7 +331,7 @@ private fun SettingsPage(ip: String?, onRefresh: () -> Unit) {
     val context = LocalContext.current
     var name by remember { mutableStateOf(FamilyStore.nickname) }
     val code = Tailnet.invitation(context)
-    Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(17.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(17.dp)) {
         Text("Your device", fontSize = 21.sp, fontWeight = FontWeight.Bold)
         OutlinedTextField(value = name, onValueChange = { name = it.take(36) },
             label = { Text("Nickname") }, modifier = Modifier.fillMaxWidth(),
@@ -363,6 +365,28 @@ private fun SettingsPage(ip: String?, onRefresh: () -> Unit) {
 }
 
 @Composable
+private fun CallControls(onHangup: () -> Unit, modifier: Modifier = Modifier) {
+    val speaker = CallController.speakerEnabled
+    val muted = CallController.microphoneMuted
+    Row(modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        OutlinedButton(onClick = { CallController.setSpeakerEnabled(!speaker) }, modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(horizontal = 4.dp)) {
+            Text(if (speaker) "Speaker on" else "Earpiece", fontSize = 11.sp, maxLines = 1)
+        }
+        OutlinedButton(onClick = { CallController.setMicrophoneMuted(!muted) }, modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(horizontal = 4.dp)) {
+            Text(if (muted) "Unmute" else "Mute mic", fontSize = 11.sp, maxLines = 1)
+        }
+        Button(onClick = onHangup, modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(horizontal = 4.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE95058), contentColor = Color.White)) {
+            Text("End call", fontSize = 11.sp, maxLines = 1)
+        }
+    }
+}
+
+@Composable
 private fun CallPage(call: CallInvite, onHangup: () -> Unit) {
     val name = FamilyStore.find(call.peerId)?.name ?: "Family device"
     if (call.isVideo) {
@@ -387,10 +411,7 @@ private fun CallPage(call: CallInvite, onHangup: () -> Unit) {
                 .width(110.dp).height(155.dp))
             Text(name, Modifier.align(Alignment.TopStart).padding(20.dp), fontSize = 20.sp,
                 fontWeight = FontWeight.SemiBold)
-            Button(onClick = onHangup, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE95058)),
-                modifier = Modifier.align(Alignment.BottomCenter).padding(30.dp)) {
-                Icon(Icons.Outlined.Call, null); Spacer(Modifier.width(9.dp)); Text("End call")
-            }
+            CallControls(onHangup, Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp))
         }
     } else {
         Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally,
@@ -398,11 +419,9 @@ private fun CallPage(call: CallInvite, onHangup: () -> Unit) {
             Avatar(name)
             Spacer(Modifier.height(20.dp))
             Text(name, fontWeight = FontWeight.Bold, fontSize = 27.sp)
-            Text("Encrypted Tailscale connection", color = muted, fontSize = 13.sp)
+            Text("Private Tailscale voice call", color = muted, fontSize = 13.sp)
             Spacer(Modifier.height(55.dp))
-            Button(onClick = onHangup, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE95058))) {
-                Icon(Icons.Outlined.Call, null); Spacer(Modifier.width(8.dp)); Text("End call")
-            }
+            CallControls(onHangup)
         }
     }
 }
