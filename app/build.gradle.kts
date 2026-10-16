@@ -14,6 +14,7 @@ android {
         versionCode = 3
         versionName = "0.1.0-alpha03"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        manifestPlaceholders["familyTouchAppLabel"] = "Family Touch"
     }
     signingConfigs {
         create("internal") {
@@ -25,6 +26,13 @@ android {
         }
     }
     buildTypes {
+        create("qa") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".qa"
+            versionNameSuffix = "-qa"
+            manifestPlaceholders["familyTouchAppLabel"] = "Family Touch QA"
+            matchingFallbacks += listOf("debug")
+        }
         release {
             signingConfig = signingConfigs.getByName("internal")
             isMinifyEnabled = false
