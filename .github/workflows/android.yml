@@ -29,7 +29,7 @@ jobs:
       - name: Unit tests
         run: gradle --no-daemon :app:testDebugUnitTest
       - name: Build APK without launching any device
-        run: gradle --no-daemon :app:assembleDebug
+        run: gradle --no-daemon :app:assembleDebug :app:assembleQa
       - name: Build signed internal APK and AAB when signing secrets are configured
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         env:
@@ -58,6 +58,8 @@ jobs:
           retention-days: 14
       - uses: actions/upload-artifact@v4
         with:
-          name: FamilyTouch-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: FamilyTouch-debug-and-qa-apks
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/qa/*.apk
           retention-days: 30
