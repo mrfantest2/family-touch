@@ -88,8 +88,10 @@ class PeerService : Service() {
                 val result = if (type == "pair") {
                     require(secret == FamilyStore.pairingSecret) { "Invitation secret is incorrect" }
                     require(id != FamilyStore.deviceId) { "Cannot pair device with itself" }
-                    FamilyStore.upsert(Peer(id, json.optString("nick", "Family device").take(36), ip, secret))
-                    JSONObject().put("id", FamilyStore.deviceId).put("nick", FamilyStore.nickname)
+                    val newToken = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
+                        .joinToString("") { "%02x".format(it) }
+                    FamilyStore.upsert(Peer(id, json.optString("nick", "Family device").take(36), ip, newToken))
+                    JSONObject().put("id", FamilyStore.deviceId).put("nick", FamilyStore.nickname).put("secret", newToken)
                 } else {
                     val peer = FamilyStore.find(id)
                     require(peer != null && secret == peer.secret) { "Device is not paired" }
