@@ -32,3 +32,7 @@ Outgoing TCP messages and call signaling now refuse to connect without an active
 
 ## Future release gating
 Release checks: CI green, media and background call behavior validated on emulator, verified APK signing, no secrets in public repo, and explicit **internal** release-target configuration. S25 installation must use ADB install only; no am start, monkey launch, screen taps, screenshots or runtime tests on S25.
+
+## Isolated physical-device QA build
+
+Run `gradle :app:assembleQa` to build an install-only test APK with package `win.fantest.familytouch.qa` and the clearly distinct launcher name **Family Touch QA**. The QA app is separately installed, preserving original Family Touch app data and Play signing. Always use the same trusted Master PC debug key for QA upgrades. Do not launch or runtime-test on S25 or OP7 without fresh user authorization. The QA and main app both use TCP port 48321, so do not operate their peer services concurrently on the same device. Remove the QA app separately when testing finishes.
