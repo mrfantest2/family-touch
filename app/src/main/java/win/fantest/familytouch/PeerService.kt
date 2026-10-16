@@ -16,6 +16,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.net.ServerSocket
@@ -35,14 +36,16 @@ class PeerService : Service() {
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         nm.createNotificationChannel(NotificationChannel(channel, "Family Touch connections", NotificationManager.IMPORTANCE_DEFAULT))
         nm.createNotificationChannel(NotificationChannel("familytouch_calls", "Incoming Family Touch calls", NotificationManager.IMPORTANCE_HIGH))
-        val notification = NotificationCompat.Builder(this, channel)
-            .setSmallIcon(android.R.drawable.stat_notify_chat)
-            .setContentTitle("Family Touch is ready")
-.setContentText("Connect Tailscale to receive private messages and calls")
-            .setOngoing(true).setContentIntent(openApp()).build()
+        val notification = connectionNotification()
         if (Build.VERSION.SDK_INT >= 34)
             startForeground(40, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING)
         else startForeground(40, notification)
+        scope.launch {
+            while (isActive) {
+                delay(20_000)
+                nm.notify(40, connectionNotification())
+            }
+        }
         listenJob = scope.launch {
             try {
                 ServerSocket(Tailnet.PORT).use { server ->
@@ -56,6 +59,18 @@ class PeerService : Service() {
                 if (isActive) FamilyStore.lastError = "Peer listener unavailable: " + ex.message
             }
         }
+    }
+
+    private fun connectionNotification(): Notification {
+        val connected = Tailnet.vpnIp(this) != null
+        return NotificationCompat.Builder(this, channel)
+            .setSmallIcon(android.R.drawable.stat_notify_chat)
+            .setContentTitle(if (connected) "Family Touch connected" else "Family Touch needs Tailscale")
+            .setContentText(if (connected) "Connected through Tailscale • Messages and calls ready"
+                else "Connect Tailscale to receive private messages and calls")
+            .setOngoing(true)
+            .setContentIntent(openApp())
+            .build()
     }
 
     private fun openApp(): PendingIntent {
