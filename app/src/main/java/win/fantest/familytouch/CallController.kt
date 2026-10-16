@@ -78,11 +78,11 @@ object CallController {
         @Suppress("DEPRECATION")
         manager.requestAudioFocus(null, AudioManager.STREAM_VOICE_CALL, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
         microphoneMuted = false
-        setSpeakerEnabled(video)
+        selectSpeakerRoute(video)
     }
 
     /** Explicitly route WebRTC audio: video defaults to speaker; voice starts at earpiece. */
-    fun setSpeakerEnabled(enabled: Boolean) {
+    fun selectSpeakerRoute(enabled: Boolean) {
         val manager = audioManager ?: return
         speakerEnabled = enabled
         if (Build.VERSION.SDK_INT >= 31) {
@@ -95,7 +95,7 @@ object CallController {
         }
     }
 
-    fun setMicrophoneMuted(muted: Boolean) {
+    fun toggleMicrophoneMute(muted: Boolean) {
         microphoneMuted = muted
         audioTrack?.setEnabled(!muted)
     }
