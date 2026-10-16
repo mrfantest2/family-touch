@@ -29,9 +29,10 @@ The native engine persists per-device identity in encrypted SharedPreferences ba
 - Current release certificate: 8b028e6a167011f2d070c333000e23cda90dbc6d6948cc71d83894da4a33ee87.
 - These certificates differ. A non-destructive update is impossible without the original signing key. Do not uninstall Alpha01. An alongside package needs the owner's choice.
 - Enrollment, authenticated reconnect, calls/messages/attachments over the embedded network remain unverified without a provisioning credential and two authorized running clients. Do not represent unit/build checks as end-to-end acceptance.
-- Local emulators list in ADB but shell requests stall; no runtime pass is claimed.
+- Emulator QA installation, home/Settings rendering, normal Android VPN consent, foreground VPN service and native NeedsLogin state verified. Authenticated tunnel routing is still unverified.
 
 ## Host build note
 
 SDK: C:/Users/Administrator/AppData/Local/Android/Sdk. Java21, Gradle8.10.2.
 The host Java Unix-domain pipe connect fails before Gradle starts. Set JAVA_TOOL_OPTIONS=-Djdk.net.unixdomain.tmpdir=C:/Temp/nonexistent-family-touch (a nonexistent directory), forcing Java's normal TCP loopback fallback. Use -Pkotlin.compiler.execution.strategy=in-process to avoid a competing Kotlin daemon. This is host setup, not APK configuration. Signing uses existing private local environment configuration; no signing secrets are committed.
+
