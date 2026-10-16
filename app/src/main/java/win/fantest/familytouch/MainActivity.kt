@@ -50,6 +50,7 @@ import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import kotlinx.coroutines.delay
 import java.text.DateFormat
 import java.util.Date
@@ -83,6 +84,10 @@ class MainActivity : ComponentActivity() {
     override fun onStop() { FamilyStore.appVisible = false; super.onStop() }
 
     private val askPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {}
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+            askPermissions.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS))
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         FamilyStore.init(this)
@@ -93,8 +98,7 @@ class MainActivity : ComponentActivity() {
         CallController.init(this)
         try { ContextCompat.startForegroundService(this, Intent(this, PeerService::class.java)) }
         catch (ex: Exception) { FamilyStore.lastError = "Service: " + ex.message }
-        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
-            askPermissions.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS))
+        if (!FamilyStore.needsNicknamePrompt) requestNotificationPermission()
         setContent {
             MaterialTheme(colorScheme = darkColorScheme(
                 primary = accent, onPrimary = Color.White, background = bg, surface = surface, onBackground = ink, onSurface = ink
@@ -106,13 +110,13 @@ class MainActivity : ComponentActivity() {
                     askPermissions.launch(missing.toTypedArray())
                     false
                 } else true
-            }) } }
+            }, onNicknameFinished = { requestNotificationPermission() }) } }
         }
     }
 }
 
 @Composable
-private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean) {
+private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFinished: () -> Unit) {
     var tab by remember { mutableIntStateOf(0) }
     var addPeerDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -176,6 +180,25 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean) {
         }
     }
 
+    if (FamilyStore.needsNicknamePrompt && incoming == null && active == null) {
+        var nickname by rememberSaveable { mutableStateOf(FamilyStore.nickname.take(36)) }
+        fun finish(value: String?) {
+            if (FamilyStore.finishNicknameSetup(value)) onNicknameFinished()
+        }
+        AlertDialog(onDismissRequest = { finish(null) },
+            title = { Text("Welcome to Family Touch") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Would you like to change your nickname? Your family will see this name.")
+                    OutlinedTextField(value = nickname, onValueChange = { nickname = it.take(36) },
+                        label = { Text("Nickname") }, singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { if (nickname.isNotBlank()) finish(nickname) }))
+                }
+            },
+            confirmButton = { TextButton(enabled = nickname.isNotBlank(), onClick = { finish(nickname) }) { Text("Save") } },
+            dismissButton = { TextButton(onClick = { finish(null) }) { Text("Skip") } })
+    }
     if (incoming != null && active == null) {
         val peerName = FamilyStore.find(incoming.peerId)?.name ?: "Family device"
         AlertDialog(onDismissRequest = {}, title = { Text("Incoming " + (if (incoming.isVideo) "video" else "voice") + " call") },

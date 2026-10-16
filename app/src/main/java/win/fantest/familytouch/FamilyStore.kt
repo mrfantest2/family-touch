@@ -55,6 +55,8 @@ object FamilyStore {
     val messages: List<ChatItem> get() = chat
     var nickname by mutableStateOf("")
         private set
+    var needsNicknamePrompt by mutableStateOf(false)
+        private set
     var lastError by mutableStateOf("")
     var selectedPeer by mutableStateOf<String?>(null)
     var incomingCall by mutableStateOf<CallInvite?>(null)
@@ -68,6 +70,12 @@ object FamilyStore {
         if (::context.isInitialized) return
         context = ctx.applicationContext
         val p = context.getSharedPreferences("identity", Context.MODE_PRIVATE)
+        // Migrate existing installations without interrupting their next launch.
+        // Persist false for a fresh identity even if a service initializes us first.
+        if (!p.contains("nicknamePromptCompleted")) {
+            p.edit().putBoolean("nicknamePromptCompleted", p.contains("deviceId")).apply()
+        }
+        needsNicknamePrompt = !p.getBoolean("nicknamePromptCompleted", false)
         deviceId = p.getString("deviceId", null) ?: UUID.randomUUID().toString().also { p.edit().putString("deviceId", it).apply() }
         pairingSecret = p.getString("pairingSecret", null) ?: ByteArray(24).also { SecureRandom().nextBytes(it) }
             .joinToString("") { "%02x".format(it) }.also { p.edit().putString("pairingSecret", it).apply() }
@@ -120,6 +128,19 @@ object FamilyStore {
         if (name.isEmpty()) return
         nickname = name
         context.getSharedPreferences("identity", Context.MODE_PRIVATE).edit().putString("nickname", name).apply()
+    }
+
+    fun finishNicknameSetup(value: String?): Boolean {
+        val name = (value ?: nickname).trim().take(36)
+        if (name.isEmpty()) return false
+        if (!context.getSharedPreferences("identity", Context.MODE_PRIVATE).edit()
+                .putString("nickname", name).putBoolean("nicknamePromptCompleted", true).commit()) {
+            lastError = "Could not save your nickname. Please try again."
+            return false
+        }
+        nickname = name
+        needsNicknamePrompt = false
+        return true
     }
 
     fun find(id: String): Peer? = peers.firstOrNull { it.id == id }
