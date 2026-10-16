@@ -38,6 +38,13 @@ android {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
+        create("embedded") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".embedded"
+            versionNameSuffix = "-standalone"
+            manifestPlaceholders["familyTouchAppLabel"] = "Family Touch Embedded"
+            matchingFallbacks += listOf("release")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

@@ -36,3 +36,16 @@ The native engine persists per-device identity in encrypted SharedPreferences ba
 SDK: C:/Users/Administrator/AppData/Local/Android/Sdk. Java21, Gradle8.10.2.
 The host Java Unix-domain pipe connect fails before Gradle starts. Set JAVA_TOOL_OPTIONS=-Djdk.net.unixdomain.tmpdir=C:/Temp/nonexistent-family-touch (a nonexistent directory), forcing Java's normal TCP loopback fallback. Use -Pkotlin.compiler.execution.strategy=in-process to avoid a competing Kotlin daemon. This is host setup, not APK configuration. Signing uses existing private local environment configuration; no signing secrets are committed.
 
+
+## Owner-approved S25 alongside installation
+
+The owner approved a separate alongside installation after the Alpha01 signing mismatch.
+The signed `embedded` build type uses package `win.fantest.familytouch.embedded` and launcher
+name **Family Touch Embedded**, while retaining the production release signing certificate.
+The original package, data, signing identity and Alpha05 APK remain untouched. This is one
+self-contained APK, not a second bundled Tailscale app. Its data and device identity are
+separate from Alpha01; pair contacts again after enrollment. Do not run both Family Touch
+peer listeners concurrently because they use the same TCP port48321.
+
+Build: `gradle :app:testEmbeddedUnitTest :app:assembleEmbedded :app:lintEmbedded` with the
+existing private release-signing environment. Never automatically launch on S25.

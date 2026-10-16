@@ -42,3 +42,29 @@ The APK is an initial integration build; the full acceptance checklist is not co
 
 GitHub Android validation succeeded: https://github.com/mrfantest2/family-touch/actions/runs/38933674142
 
+
+## Owner-approved alongside build — 2026-10-16
+
+Owner explicitly approved alongside installation. Signed build type embedded:
+- Package win.fantest.familytouch.embedded
+- Label Family Touch Embedded
+- Version 0.1.0-embedded02-standalone (7)
+- Filename Family-Touch-Embedded-Tailscale-embedded02-standalone.apk
+- Size 144365900 bytes
+- SHA256 57b8192247871f6120002e68c0e6ad57b8f2b62b3c5a55017a609d8ccb76b6ab
+- Same release certificate 8b028e6a167011f2d070c333000e23cda90dbc6d6948cc71d83894da4a33ee87
+- testEmbeddedUnitTest, assembleEmbedded, lintEmbedded: BUILD SUCCESSFUL in 1m51s, 15 tests pass.
+- aapt confirms package and launcher label; apksigner verification passed.
+- Stable requested URL now serves this alongside build; original-package embedded02 remains at its versioned URL.
+
+Enrollment still requires a valid one-time tailnet provisioning credential. Owner approval does not constitute an authentication credential. No Tailscale account password, reusable key, host identity or preauthenticated identity has been embedded. Standalone Tailscale app is unnecessary. Android VPN consent is still required on first activation. S25 must remain unlaunched after installation.
+
+Deployment confirmed: S25 ADB install --user 0 -r returned Success. Package
+win.fantest.familytouch.embedded reports versionCode7, versionName
+0.1.0-embedded02-standalone, installed=true, stopped=true, notLaunched=true.
+Original win.fantest.familytouch remains installed. No launch or data reset performed.
+Device download SHA256 and APK signer matched expected values before installation.
+
+The unversioned URL may return an older Cloudflare-cached build. Use the immutable
+versioned URL for this installation:
+https://fantest.win/downloads/Family-Touch-Embedded-Tailscale-embedded02-standalone.apk
