@@ -27,5 +27,8 @@ Run: \`gradle :app:assembleDebug\`. The GitHub Actions workflow also produces a 
 4. Pairing registers both devices. You can then exchange messages and initiate calls.
 5. Edit your nickname under Settings. Updates propagate when you message peers.
 
+## Checkpoint alpha03 — network boundary hardening
+Outgoing TCP messages and call signaling now refuse to connect without an active VPN network assigned a Tailscale-range IPv4 address. The listener refuses peer requests while disconnected and still validates source addresses and per-peer credentials. The TCP JSON protocol now enforces a 128-KiB inbound frame limit and a 32-KiB response limit. This is a **pre-release code checkpoint**, not a claim that real-device or two-emulator calls have been verified. The check detects a suitable VPN network; it does not cryptographically prove which VPN app supplied it. Tailscale ACLs remain required.
+
 ## Future release gating
 Release checks: CI green, media and background call behavior validated on emulator, verified APK signing, no secrets in public repo, and explicit **internal** release-target configuration. S25 installation must use ADB install only; no am start, monkey launch, screen taps, screenshots or runtime tests on S25.

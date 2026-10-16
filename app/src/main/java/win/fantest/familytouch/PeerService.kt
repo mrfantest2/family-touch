@@ -31,13 +31,14 @@ class PeerService : Service() {
     override fun onCreate() {
         super.onCreate()
         FamilyStore.init(this)
+        Tailnet.init(this)
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         nm.createNotificationChannel(NotificationChannel(channel, "Family Touch connections", NotificationManager.IMPORTANCE_DEFAULT))
         nm.createNotificationChannel(NotificationChannel("familytouch_calls", "Incoming Family Touch calls", NotificationManager.IMPORTANCE_HIGH))
         val notification = NotificationCompat.Builder(this, channel)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
             .setContentTitle("Family Touch is ready")
-            .setContentText("Listening privately through Tailscale")
+.setContentText("Connect Tailscale to receive private messages and calls")
             .setOngoing(true).setContentIntent(openApp()).build()
         if (Build.VERSION.SDK_INT >= 34)
             startForeground(40, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING)
@@ -79,8 +80,8 @@ class PeerService : Service() {
             try {
                 val ip = s.inetAddress.hostAddress.orEmpty()
                 require(Tailnet.isTailIp(ip)) { "Tailscale peers only" }
-                val line = s.getInputStream().bufferedReader(Charsets.UTF_8).readLine()
-                require(line != null && line.length <= 262144) { "Oversized request" }
+                check(Tailnet.vpnIp(this@PeerService) != null) { "Connect Tailscale before accepting peer traffic" }
+                val line = Tailnet.readWireLine(s.getInputStream().buffered())
                 val json = JSONObject(line)
                 val id = json.getString("id")
                 val type = json.getString("type")

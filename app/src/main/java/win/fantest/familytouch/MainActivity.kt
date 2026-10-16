@@ -65,6 +65,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         FamilyStore.init(this)
+        Tailnet.init(this)
         CallController.init(this)
         try { ContextCompat.startForegroundService(this, Intent(this, PeerService::class.java)) }
         catch (ex: Exception) { FamilyStore.lastError = "Service: " + ex.message }

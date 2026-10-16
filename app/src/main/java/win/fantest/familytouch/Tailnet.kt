@@ -7,12 +7,33 @@ import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.net.Inet4Address
 import java.net.InetSocketAddress
 import java.net.Socket
 
 object Tailnet {
     const val PORT = 48321
+    @Volatile private var appContext: Context? = null
+
+    fun init(context: Context) { appContext = context.applicationContext }
+
+    /** Read one newline-terminated wire frame with a strict byte bound. */
+    internal fun readWireLine(input: InputStream, maxBytes: Int = 131072): String {
+        require(maxBytes > 0)
+        val bytes = ByteArrayOutputStream()
+        while (true) {
+            val next = input.read()
+            require(next >= 0) { "Peer disconnected mid-message" }
+            if (next == 10) break
+            require(bytes.size() < maxBytes) { "Oversized peer message" }
+            bytes.write(next)
+        }
+        val data = bytes.toByteArray()
+        val length = if (data.isNotEmpty() && data.last() == 13.toByte()) data.size - 1 else data.size
+        return String(data, 0, length, Charsets.UTF_8)
+    }
 
     fun isTailIp(ip: String): Boolean {
         val parts = ip.split(".").mapNotNull { it.toIntOrNull() }
@@ -52,15 +73,19 @@ object Tailnet {
 
     suspend fun send(peer: Peer, type: String, payload: JSONObject = JSONObject()): JSONObject = withContext(Dispatchers.IO) {
         require(isTailIp(peer.ip)) { "Tailscale-only connections" }
+        val ctx = requireNotNull(appContext) { "Family Touch networking is not initialized" }
+        check(vpnIp(ctx) != null) { "Connect to Tailscale before messaging or calling" }
         val req = JSONObject().put("type", type).put("id", FamilyStore.deviceId)
             .put("nick", FamilyStore.nickname).put("secret", peer.secret)
-        for (key in payload.keys()) req.put(key, payload.get(key))
+        for (key in payload.keys()) {
+            require(key !in setOf("type", "id", "nick", "secret")) { "Reserved protocol field" }
+            req.put(key, payload.get(key))
+        }
         Socket().use { socket ->
             socket.connect(InetSocketAddress(peer.ip, PORT), 4500)
             socket.soTimeout = 8000
             socket.getOutputStream().bufferedWriter(Charsets.UTF_8).apply { write(req.toString()); newLine(); flush() }
-            val response = socket.getInputStream().bufferedReader(Charsets.UTF_8).readLine()
-                ?: throw IllegalStateException("Peer disconnected")
+            val response = readWireLine(socket.getInputStream().buffered(), 32768)
             val result = JSONObject(response)
             if (!result.optBoolean("ok")) throw IllegalStateException(result.optString("error", "Request rejected"))
             result
