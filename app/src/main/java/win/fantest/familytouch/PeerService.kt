@@ -122,6 +122,8 @@ class PeerService : Service() {
         }
     }
 
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+
     override fun onDestroy() {
         listener?.close()
         listenJob?.cancel()

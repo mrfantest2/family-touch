@@ -11,6 +11,8 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <application
+        android:icon="@drawable/ic_family_touch"
+        android:roundIcon="@drawable/ic_family_touch"
         android:label="Family Touch"
         android:theme="@style/Theme.FamilyTouch"
         android:allowBackup="false"
