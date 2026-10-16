@@ -1,6 +1,12 @@
 package win.fantest.familytouch
 
 import android.content.Context
+import android.media.AudioManager
+import android.media.AudioDeviceInfo
+import android.os.Build
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -53,6 +59,60 @@ object CallController {
     private val earlyIce = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.CopyOnWriteArrayList<IceCandidate>>()
     private var hasRemoteDescription = false
     private var currentPeer: Peer? = null
+    private var audioManager: AudioManager? = null
+    private var previousAudioMode: Int? = null
+    private var previousSpeakerphone = false
+    @Volatile private var closing = false
+    var speakerEnabled by mutableStateOf(false)
+        private set
+    var microphoneMuted by mutableStateOf(false)
+        private set
+
+    private fun routeAudioToCall(video: Boolean) {
+        val manager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        audioManager = manager
+        previousAudioMode = manager.mode
+        @Suppress("DEPRECATION")
+        previousSpeakerphone = manager.isSpeakerphoneOn
+        manager.mode = AudioManager.MODE_IN_COMMUNICATION
+        @Suppress("DEPRECATION")
+        manager.requestAudioFocus(null, AudioManager.STREAM_VOICE_CALL, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+        microphoneMuted = false
+        setSpeakerEnabled(video)
+    }
+
+    /** Explicitly route WebRTC audio: video defaults to speaker; voice starts at earpiece. */
+    fun setSpeakerEnabled(enabled: Boolean) {
+        val manager = audioManager ?: return
+        speakerEnabled = enabled
+        if (Build.VERSION.SDK_INT >= 31) {
+            val type = if (enabled) AudioDeviceInfo.TYPE_BUILTIN_SPEAKER else AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
+            manager.availableCommunicationDevices.firstOrNull { it.type == type }
+                ?.let { manager.setCommunicationDevice(it) }
+        } else {
+            @Suppress("DEPRECATION")
+            manager.isSpeakerphoneOn = enabled
+        }
+    }
+
+    fun setMicrophoneMuted(muted: Boolean) {
+        microphoneMuted = muted
+        audioTrack?.setEnabled(!muted)
+    }
+
+    private fun restoreAudio() {
+        val manager = audioManager ?: return
+        if (Build.VERSION.SDK_INT >= 31) manager.clearCommunicationDevice()
+        @Suppress("DEPRECATION")
+        manager.isSpeakerphoneOn = previousSpeakerphone
+        previousAudioMode?.let { manager.mode = it }
+        @Suppress("DEPRECATION")
+        manager.abandonAudioFocus(null)
+        previousAudioMode = null
+        audioManager = null
+        speakerEnabled = false
+        microphoneMuted = false
+    }
 
     val eglContext get() = egl.eglBaseContext
 
@@ -84,6 +144,8 @@ object CallController {
     private fun prepare(peer: Peer, video: Boolean) {
         require(ready) { "Initialize calling while the app is visible" }
         clear(false)
+        closing = false
+        routeAudioToCall(video)
         currentPeer = peer
         pendingIce.clear()
         hasRemoteDescription = false
@@ -92,7 +154,7 @@ object CallController {
         connection = factory.createPeerConnection(config, object : PeerConnection.Observer {
             override fun onSignalingChange(state: PeerConnection.SignalingState?) {}
             override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) {
-                if (state == PeerConnection.IceConnectionState.FAILED || state == PeerConnection.IceConnectionState.DISCONNECTED) {
+                if (state == PeerConnection.IceConnectionState.FAILED && !closing && FamilyStore.activeCall != null) {
                     FamilyStore.lastError = "Call network interrupted. Confirm both devices are connected to Tailscale."
                 }
             }
@@ -243,6 +305,7 @@ object CallController {
     }
 
     private fun clear(notify: Boolean) {
+        closing = true
         if (notify) currentPeer?.let { signal("hangup", JSONObject()) }
         try { camera?.stopCapture() } catch (_: Exception) {}
         camera?.dispose(); camera = null
@@ -255,6 +318,7 @@ object CallController {
         source?.dispose(); source = null
         audioSource?.dispose(); audioSource = null
         connection?.close(); connection?.dispose(); connection = null
+        restoreAudio()
         currentPeer = null
         hasRemoteDescription = false
         pendingIce.clear()
