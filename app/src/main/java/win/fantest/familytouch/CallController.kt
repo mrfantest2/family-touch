@@ -11,6 +11,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import org.json.JSONObject
 import java.util.UUID
 import org.webrtc.AudioSource
@@ -239,6 +240,14 @@ object CallController {
             prepare(peer, video)
             beginLog(video, true)
             FamilyStore.activeCall = CallInvite(peer.id, video, outgoing = true)
+            io.launch {
+                delay(45_000L)
+                if (currentPeer?.id == peer.id && connectedSinceMs == null &&
+                    FamilyStore.activeCall?.outgoing == true) {
+                    hangup()
+                    FamilyStore.lastError = "No answer from " + peer.name
+                }
+            }
             connection?.createOffer(object : SdpObserver {
                 override fun onCreateSuccess(sdp: SessionDescription?) {
                     if (sdp == null) return
@@ -310,6 +319,22 @@ object CallController {
                 val peer = FamilyStore.find(peerId) ?: return
                 FamilyStore.incomingCall = CallInvite(peerId, data.optBoolean("video"), data.getString("sdp"))
                 alert(peer.name + " is calling")
+                val pendingOffer = FamilyStore.incomingCall
+                io.launch {
+                    delay(45_000L)
+                    if (FamilyStore.incomingCall == pendingOffer && FamilyStore.activeCall == null) {
+                        RingtonePlayer.stop()
+                        FamilyStore.incomingCall = null
+                        if (::context.isInitialized) {
+                            (context.getSystemService(Context.NOTIFICATION_SERVICE) as
+                                android.app.NotificationManager).cancel(41)
+                        }
+                        FamilyStore.addCallLog(CallLogRecord(UUID.randomUUID().toString(), peerId,
+                            data.optBoolean("video"), false, System.currentTimeMillis() - 45_000L,
+                            0L, System.currentTimeMillis(), "missed"))
+                        io.launch { try { Tailnet.send(peer, "hangup") } catch (_: Exception) {} }
+                    }
+                }
             }
             "answer" -> if (currentPeer?.id == peerId && ready) {
                 setRemote(SessionDescription(SessionDescription.Type.ANSWER, data.getString("sdp")))
