@@ -70,6 +70,8 @@ object Tailnet {
     suspend fun pair(peer: Peer) {
         val result = send(peer, "pair", JSONObject().put("ip", peer.ip))
         require(result.getString("id") == peer.id) { "Identity mismatch: decline the invitation" }
-        FamilyStore.upsert(peer.copy(name = result.optString("nick", peer.name)))
+        val grantedToken = result.getString("secret")
+        require(grantedToken.length >= 40) { "Pairing response missing peer credential" }
+        FamilyStore.upsert(peer.copy(name = result.optString("nick", peer.name), secret = grantedToken))
     }
 }
