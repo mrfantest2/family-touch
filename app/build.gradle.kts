@@ -15,8 +15,18 @@ android {
         versionName = "0.1.0-alpha01"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
+    signingConfigs {
+        create("internal") {
+            val keyPath = System.getenv("FAMILY_TOUCH_KEYSTORE_FILE")
+            if (!keyPath.isNullOrBlank()) storeFile = file(keyPath)
+            storePassword = System.getenv("FAMILY_TOUCH_KEYSTORE_PASSWORD")
+            keyAlias = System.getenv("FAMILY_TOUCH_KEY_ALIAS")
+            keyPassword = System.getenv("FAMILY_TOUCH_KEY_PASSWORD")
+        }
+    }
     buildTypes {
         release {
+            signingConfig = signingConfigs.getByName("internal")
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
