@@ -15,7 +15,7 @@ import org.webrtc.DefaultVideoDecoderFactory
 import org.webrtc.DefaultVideoEncoderFactory
 import org.webrtc.EglBase
 import org.webrtc.IceCandidate
-import org.webrtc.JavaAudioDeviceModule
+import org.webrtc.audio.JavaAudioDeviceModule
 import org.webrtc.MediaConstraints
 import org.webrtc.MediaStream
 import org.webrtc.PeerConnection
@@ -117,10 +117,9 @@ object CallController {
                 remoteRenderer?.let { track.addSink(it) }
             }
         })
-        val stream = factory.createLocalMediaStream("FamilyTouch")
         audioSource = factory.createAudioSource(MediaConstraints())
         audioTrack = factory.createAudioTrack("FTAudio", audioSource)
-        stream.addTrack(audioTrack)
+        connection?.addTrack(audioTrack, listOf("FamilyTouch"))
         if (video) {
             val enumerator = Camera2Enumerator(context)
             val names = enumerator.deviceNames
@@ -132,11 +131,10 @@ object CallController {
                 camera?.initialize(helper, context, source?.capturerObserver)
                 camera?.startCapture(640, 480, 20)
                 localVideo = factory.createVideoTrack("FTVideo", source)
-                stream.addTrack(localVideo)
+                localVideo?.let { connection?.addTrack(it, listOf("FamilyTouch")) }
                 localRenderer?.let { localVideo?.addSink(it) }
             }
         }
-        connection?.addStream(stream)
     }
 
     private fun constraints(video: Boolean) = MediaConstraints().apply {
