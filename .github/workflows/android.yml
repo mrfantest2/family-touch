@@ -31,7 +31,7 @@ jobs:
       - name: Build APK without launching any device
         run: gradle --no-daemon :app:assembleDebug
       - name: Build signed internal APK and AAB when signing secrets are configured
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         env:
           FT_KEYSTORE_B64: ${{ secrets.FAMILY_TOUCH_KEYSTORE_B64 }}
           FAMILY_TOUCH_KEYSTORE_PASSWORD: ${{ secrets.FAMILY_TOUCH_KEYSTORE_PASSWORD }}
