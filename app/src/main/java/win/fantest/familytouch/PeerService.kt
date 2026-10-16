@@ -57,7 +57,7 @@ class PeerService : Service() {
                 val connected = Tailnet.vpnIp(this@PeerService) != null
                 if (wasConnected != connected) {
                     wasConnected = connected
-                    nm.notify(40, connectionNotification())
+                    nm.notify(NotificationIds.CONNECTION, connectionNotification())
                 }
             }
         }
@@ -108,6 +108,8 @@ class PeerService : Service() {
             .setContentText(if (connected) "Connected through Tailscale • Messages and calls ready"
                 else "Connect Tailscale to receive private messages and calls")
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
             .setContentIntent(openApp())
             .build()
     }
@@ -117,7 +119,8 @@ class PeerService : Service() {
         return PendingIntent.getActivity(this, 5, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     }
 
-    private fun showNotification(title: String, text: String, call: Boolean = false) {
+    private fun showNotification(title: String, text: String, call: Boolean = false, peerId: String? = null) {
+        if (!call && FamilyStore.appVisible && FamilyStore.selectedPeer == peerId) return
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         val c = if (call) callChannel else messageChannel
         val builder = NotificationCompat.Builder(this, c).setSmallIcon(android.R.drawable.stat_notify_chat)
@@ -125,7 +128,7 @@ class PeerService : Service() {
         if (call) {
             builder.setCategory(NotificationCompat.CATEGORY_CALL).setPriority(NotificationCompat.PRIORITY_HIGH)
         }
-        nm.notify(if (call) 41 else ((System.currentTimeMillis() % 100000).toInt() + 100),
+        nm.notify(if (call) NotificationIds.INCOMING_CALL else NotificationIds.messageForPeer(requireNotNull(peerId)),
             builder.build())
         if (call) RingtonePlayer.start(this)
     }
@@ -163,7 +166,7 @@ class PeerService : Service() {
                             if (FamilyStore.messages.none { it.id == item.id }) {
                                 FamilyStore.addChat(item)
                                 showNotification(json.optString("nick", "Family Touch"),
-                                    if (item.text.contains("|image/")) "Sent a photo" else "Sent a video")
+                                    if (item.text.contains("|image/")) "Sent a photo" else "Sent a video", peerId = id)
                             }
                             JSONObject()
                         }
@@ -184,7 +187,7 @@ class PeerService : Service() {
                             val exists = FamilyStore.messages.any { it.id == messageId }
                             if (!exists) {
                                 FamilyStore.addChat(ChatItem(messageId, id, false, txt, System.currentTimeMillis(), true))
-                                showNotification(json.optString("nick", "Family Touch"), txt.take(100))
+                                showNotification(json.optString("nick", "Family Touch"), txt.take(100), peerId = id)
                             }
                         }
                         "offer", "answer", "ice", "hangup" -> CallController.receive(type, id, json) { who ->
