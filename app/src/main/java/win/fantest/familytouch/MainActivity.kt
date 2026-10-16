@@ -117,13 +117,16 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean) {
     var addPeerDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val ip = remember { mutableStateOf(Tailnet.vpnIp(context)) }
+    var networkStatus by remember { mutableStateOf(EmbeddedTailnet.status) }
     val contacts = FamilyStore.contacts.toList()
     val selectedPeer = FamilyStore.selectedPeer?.let { FamilyStore.find(it) }
     val incoming = FamilyStore.incomingCall
     val active = FamilyStore.activeCall
 
-    LaunchedEffect(Unit) { while (true) { ip.value = Tailnet.vpnIp(context); delay(1000) } }
+    LaunchedEffect(Unit) { while (true) {
+        networkStatus = EmbeddedTailnet.status
+        delay(500)
+    } }
     Column(Modifier.fillMaxSize().background(bg).statusBarsPadding().navigationBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 18.dp, bottom = 14.dp),
             verticalAlignment = Alignment.CenterVertically) {
@@ -135,10 +138,9 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean) {
             }
             Column(Modifier.weight(1f)) {
                 Text(selectedPeer?.name ?: "Family Touch", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                Text(if (ip.value != null) "Private Tailscale network" else "Connect private network in Settings",
-                    fontSize = 12.sp, color = if (ip.value != null) Color(0xFF5DDAA7) else Color(0xFFFFC466))
+                Text(networkStatus.label,
+                    fontSize = 12.sp, color = if (networkStatus.connected) Color(0xFF5DDAA7) else Color(0xFFFFC466))
             }
-            IconButton(onClick = { ip.value = Tailnet.vpnIp(context) }) { Icon(Icons.Outlined.Wifi, "Refresh Tailscale") }
             if (tab == 2 && selectedPeer == null) IconButton(onClick = { addPeerDialog = true }) {
                 Icon(Icons.Outlined.Add, "Pair new contact")
             }
@@ -158,7 +160,7 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean) {
                         if (askCallPermissions(video)) CallController.start(peer, video)
                     }
                     2 -> ContactsPage(contacts, onOpen = { FamilyStore.selectedPeer = it; tab = 0 }, onPair = { addPeerDialog = true })
-                    else -> SettingsPage(ip.value, onRefresh = { ip.value = Tailnet.vpnIp(context) })
+                    else -> SettingsPage(networkStatus)
                 }
             }
             NavigationBar(containerColor = Color(0xFF0B1B2D)) {
@@ -520,7 +522,7 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
 }
 
 @Composable
-private fun SettingsPage(ip: String?, onRefresh: () -> Unit) {
+private fun SettingsPage(networkStatus: VpnConnectionStatus) {
     val context = LocalContext.current
     var name by remember { mutableStateOf(FamilyStore.nickname) }
     val scope = rememberCoroutineScope()
@@ -555,7 +557,7 @@ private fun SettingsPage(ip: String?, onRefresh: () -> Unit) {
             }
         } catch (e: Exception) { FamilyStore.lastError = "Picture selection failed: " + e.message }
     }
-    val code = Tailnet.invitation(context)
+    val code = if (networkStatus.connected) Tailnet.invitation(context) else null
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(17.dp)) {
         Text("Your device", fontSize = 21.sp, fontWeight = FontWeight.Bold)
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -574,9 +576,6 @@ private fun SettingsPage(ip: String?, onRefresh: () -> Unit) {
             color = muted, fontSize = 12.sp)
         HorizontalDivider(color = Color(0xFF24415C))
         VpnSettings()
-        Text(if (ip != null) "Connected privately • " + ip else "Private network disconnected",
-            color = if (ip != null) Color(0xFF5DDAA7) else Color(0xFFFFBD76))
-        OutlinedButton(onClick = onRefresh) { Icon(Icons.Outlined.Wifi, null); Spacer(Modifier.width(6.dp)); Text("Refresh connection") }
         HorizontalDivider(color = Color(0xFF24415C))
         Text("Invite a family device", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
         Text("Share this code privately with a trusted person who is already on your Tailscale network. Never post it publicly.",

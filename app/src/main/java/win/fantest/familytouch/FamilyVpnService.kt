@@ -19,6 +19,9 @@ class FamilyVpnService : VpnService(), libtailscale.IPNService {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var closed = false
     private var started = false
+    private var watchJob: Job? = null
+    private var cleanupJob: Job? = null
+    private var engineReady = false
     private val cm by lazy { getSystemService(ConnectivityManager::class.java) }
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) = updateNetwork()
@@ -27,10 +30,10 @@ class FamilyVpnService : VpnService(), libtailscale.IPNService {
         override fun onLinkPropertiesChanged(network: Network, props: LinkProperties) = updateNetwork()
     }
     private fun updateNetwork() {
-        val network = cm.allNetworks.firstOrNull { cm.getNetworkCapabilities(it)?.let { c ->
-            c.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) && c.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-        } == true }
+        val network = selectedPhysicalNetwork(cm)
         setUnderlyingNetworks(network?.let { arrayOf(it) } ?: emptyArray())
+        if (network == null && EmbeddedTailnet.status.connected)
+            EmbeddedTailnet.status = VpnConnectionStatus("Waiting for internet")
         if (started) {
             val props = network?.let { cm.getLinkProperties(it) }
             Libtailscale.onGatewayChanged(props?.routes?.firstOrNull { it.isDefaultRoute }?.gateway?.hostAddress ?: "")
@@ -44,46 +47,66 @@ class FamilyVpnService : VpnService(), libtailscale.IPNService {
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == STOP) {
-            EmbeddedTailnet.state = "Disconnected"
+            EmbeddedTailnet.stopping = true
+            EmbeddedTailnet.status = VpnConnectionStatus("Disconnecting")
             getSharedPreferences("vpn", Context.MODE_PRIVATE).edit().putBoolean("enabled", false).apply()
-            scope.launch { runCatching { EmbeddedTailnet.api(this@FamilyVpnService, "PATCH", "prefs", JSONObject().put("WantRunning", false).put("WantRunningSet", true)) }; close() }
+            close()
             return START_NOT_STICKY
         }
-        if (prepare(this) != null) { EmbeddedTailnet.state = "VPN permission required"; stopSelf(); return START_NOT_STICKY }
+        if (prepare(this) != null) { EmbeddedTailnet.status = VpnConnectionStatus("VPN permission required"); stopSelf(); return START_NOT_STICKY }
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel("embedded_vpn", "Private family network", NotificationManager.IMPORTANCE_LOW))
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val stop = PendingIntent.getService(this, 1, Intent(this, FamilyVpnService::class.java).setAction(STOP), PendingIntent.FLAG_IMMUTABLE)
         startForeground(2401, NotificationCompat.Builder(this, "embedded_vpn").setSmallIcon(R.drawable.ic_family_touch)
-            .setContentTitle("Family Touch private network").setContentText("Embedded Tailscale is active")
+            .setContentTitle("Family Touch private network").setContentText("Connecting")
             .setContentIntent(open).setOngoing(true).addAction(0, "Disconnect", stop).build())
         getSharedPreferences("vpn", Context.MODE_PRIVATE).edit().putBoolean("enabled", true).apply()
         if (started) return START_STICKY
         started = true
-        EmbeddedTailnet.state = "Connecting"
-        scope.launch {
+        EmbeddedTailnet.serviceActive = true
+        EmbeddedTailnet.stopping = false
+        EmbeddedTailnet.status = VpnConnectionStatus("Connecting")
+        watchJob = scope.launch {
             try {
                 EmbeddedTailnet.engine(this@FamilyVpnService)
+                engineReady = true
+                ensureActive()
                 Libtailscale.requestVPN(this@FamilyVpnService)
+                ensureActive()
                 updateNetwork()
+                ensureActive()
                 EmbeddedTailnet.api(this@FamilyVpnService, "PATCH", "prefs", JSONObject().put("WantRunning", true).put("WantRunningSet", true))
+                ensureActive()
                 while (isActive) {
                     val status = EmbeddedTailnet.api(this@FamilyVpnService, "GET", "status")
-                    EmbeddedTailnet.state = when (val state = status.optString("BackendState")) {
-                        "NeedsLogin" -> "Import a device provisioning file in Settings"
-                        "NeedsMachineAuth" -> "Waiting for tailnet administrator approval"
-                        "Running" -> if (EmbeddedTailnet.tunnelActive) "Connected" else "Establishing VPN"
-                        else -> state.ifEmpty { "Connecting" }
+                    ensureActive()
+                    val addresses = status.optJSONArray("TailscaleIPs")
+                    val nodeIp = (0 until (addresses?.length() ?: 0)).map { addresses!!.optString(it) }
+                        .firstOrNull { Tailnet.isTailIp(it) }
+                    val next = VpnConnectionStatus.fromBackend(status.optString("BackendState"),
+                        EmbeddedTailnet.tunnelActive, nodeIp, Tailnet.vpnIp(this@FamilyVpnService),
+                        selectedPhysicalNetwork(cm)?.let { cm.getNetworkCapabilities(it)
+                            ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) } == true)
+                    if (next != EmbeddedTailnet.status) {
+                        EmbeddedTailnet.status = next
+                        manager.notify(2401, NotificationCompat.Builder(this@FamilyVpnService, "embedded_vpn")
+                            .setSmallIcon(R.drawable.ic_family_touch).setContentTitle("Family Touch private network")
+                            .setContentText(next.label).setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true)
+                            .addAction(0, "Disconnect", stop).build())
                     }
                     delay(3000)
                 }
             } catch (e: CancellationException) { throw e }
-            catch (_: Exception) { EmbeddedTailnet.state = "Connection failed; reconnect or provision this device"; close() }
+            catch (_: Exception) { EmbeddedTailnet.status = VpnConnectionStatus("Connection failed — try again"); close() }
         }
         return START_STICKY
     }
     override fun id() = serviceId
-    override fun updateVpnStatus(status: Boolean) { EmbeddedTailnet.tunnelActive = status }
+    override fun updateVpnStatus(status: Boolean) {
+        EmbeddedTailnet.tunnelActive = status
+        if (!status && EmbeddedTailnet.status.connected) EmbeddedTailnet.status = VpnConnectionStatus("Reconnecting")
+    }
     override fun newBuilder(): libtailscale.VPNServiceBuilder {
         val builder = Builder().setSession("Family Touch").setMtu(1280).setMetered(false)
             .addAllowedApplication(packageName)
@@ -103,24 +126,46 @@ class FamilyVpnService : VpnService(), libtailscale.IPNService {
             }
         }
     }
-    override fun disconnectVPN() { stopSelf() }
+    override fun disconnectVPN() { close() }
     override fun close() {
         synchronized(this) { if (closed) return; closed = true }
-        if (started) scope.launch { Libtailscale.serviceDisconnect(this@FamilyVpnService) }
-        EmbeddedTailnet.tunnelActive = false
-        stopSelf()
+        watchJob?.cancel()
+        EmbeddedTailnet.stopping = true
+        cleanupJob = scope.launch {
+            try {
+                // Cancellation cannot interrupt JNI. Wait for startup to leave native code,
+                // then apply the final stop so a late WantRunning=true cannot undo it.
+                watchJob?.join()
+                if (engineReady) {
+                    runCatching {
+                        EmbeddedTailnet.api(this@FamilyVpnService, "PATCH", "prefs",
+                            JSONObject().put("WantRunning", false).put("WantRunningSet", true))
+                    }
+                    runCatching { Libtailscale.serviceDisconnect(this@FamilyVpnService) }
+                }
+            } finally {
+                EmbeddedTailnet.tunnelActive = false
+                EmbeddedTailnet.serviceActive = false
+                if (EmbeddedTailnet.status.label in setOf("Disconnecting", "Connecting", "Reconnecting", "Waiting for internet") || EmbeddedTailnet.status.connected)
+                    EmbeddedTailnet.status = VpnConnectionStatus("Disconnected")
+                stopSelf()
+            }
+        }
     }
     override fun onRevoke() {
         getSharedPreferences("vpn", Context.MODE_PRIVATE).edit().putBoolean("enabled", false).apply()
-        EmbeddedTailnet.state = "VPN permission revoked — another VPN may be active"
+        EmbeddedTailnet.status = VpnConnectionStatus("VPN permission revoked — another VPN may be active")
         close()
         super.onRevoke()
     }
     override fun onDestroy() {
         runCatching { cm.unregisterNetworkCallback(callback) }
         close()
-        // Deliver the disconnect to Go before cancelling this service's coroutine scope.
-        scope.launch { delay(250); scope.cancel() }
+        // Native startup/stop may take longer than a fixed grace period.
+        cleanupJob?.invokeOnCompletion {
+            EmbeddedTailnet.stopping = false
+            scope.cancel()
+        }
         super.onDestroy()
     }
     companion object { const val STOP = "win.fantest.familytouch.STOP_VPN" }

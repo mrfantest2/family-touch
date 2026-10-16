@@ -1,15 +1,15 @@
-# Family Touch handoff — embedded Tailscale
+# Family Touch handoff — embedded03 connection toggle
 
-Worktree: C:/Khalil/family-touch/embedded-tailscale. Original source directory preserved.
-Branch: feature/embedded-tailscale. Implementation pushed as 857bad639abe3c777c894ce8986e51837d0173e0.
-Read docs/EMBEDDED_TAILSCALE_PLAN.md and docs/EMBEDDED_TAILSCALE_RELEASE_20261016.md.
+Worktree:C:/Khalil/family-touch/embedded-tailscale. Branch:feature/embedded-tailscale. Original source directory untouched.
 
-Signed embedded02 APK is public at the requested fantest.win URL and delivered to S25 Download with verified hash. Release tests/build/lint passed. Alpha05 unchanged. Owner approved alongside installation. The signed win.fantest.familytouch.embedded package (Family Touch Embedded) is now installed on S25; dumpsys confirms installed=true, stopped=true, notLaunched=true. Original package remains installed. Never uninstall/wipe or automatically launch S25. Use the versioned embedded02-standalone APK link because the unversioned URL can be cached.
+Current installed S25 build:win.fantest.familytouch.embedded versionCode8,0.1.0-embedded03-standalone. Signed, verified, updated in place; no S25 launch command. Original app stays installed. Owner already launched the previous build, so do not claim notLaunched=true now. ModelSM-S938B,qemu0 verified on remote S25 ADB emulator-5554 (not local Windows emulator-5554).
 
-No enrollment key/admin API credential provided. Do not copy host Tailscale identity or embed reusable keys. Encrypted device-specific provisioning is implemented; admin tooling is tools/New-DeviceProvisioning.ps1. Full authenticated networking/call acceptance is outstanding.
+Download:https://fantest.win/downloads/Family-Touch-Embedded-Tailscale-embedded03-standalone.apk
+SHA256:79562ee2f05ea83b8ef67120f5f298ff3be63ebe29b9f7bafbb4cfa1744540d1
+Size144365900. Use immutable versioned link; stable alias can be Cloudflare cached.
 
-Emulator-5556 is the existing FamilyConnectVPNQA_API36 emulator. QA package installed; after dismissing System UI ANR, home/Settings and normal VPN consent worked. Native local API reached NeedsLogin and VPN foreground service was confirmed. Further authenticated tests need provisioning. S25 emulator-5554 serial exists only on the remote S25 host, is a physical Samsung, and must never be confused with local Windows emulator-5554.
+Read docs/FAMILY_CONNECTION_UX.md and latest section of docs/EMBEDDED_TAILSCALE_RELEASE_20261016.md. Single toggle, shared header/Settings/notification status, actual native+Android VPN IPv4 match and validated physical-network requirement are implemented. Owner file tools collapsed. Cancellation/shutdown waits for native startup before final stop.22 tests, build, lint, signing/HTTPS checks pass. Emulator normal connect/unenrolled/disconnect/reconnect flow passes. No authenticated routing/call/message pass.
 
-Build logs are outside repo under C:/Khalil/family-touch/embedded-*.log. Host Java Unix-domain pipe workaround documented in implementation plan. Signing secrets remain local outside Git; AAR is pinned and checked in, with licenses in APK assets. CI workflow runs this feature branch.
+CRITICAL REMAINING USER GOAL:family installs once without import/export or extra apps. This is NOT implemented merely by hiding recovery controls. Need owner-authorized enrollment service with secure family-device admission and per-device short-lived credentials. No admin/API credential exists. Asked owner via pending async question to sign into Tailscale admin on MASTER-PC once; do not request secrets in chat, embed reusable keys, copy host node identity, or auto-enroll anonymous public APK downloaders. Existing app reaches NeedsLogin, not a connected VPN.
 
-
+Build/signing environment and Java socket workaround are documented in EMBEDDED_TAILSCALE_PLAN.md. Existing secrets stay outside Git. Logs/toggle UI dumps reside outside repo under C:/Khalil/family-touch. Local emulator-5556 is FamilyConnectVPNQA_API36; QA package updated and left at Home with VPN stopped. S25 remains install-only unless owner explicitly requests runtime control.

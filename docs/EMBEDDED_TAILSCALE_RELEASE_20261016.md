@@ -68,3 +68,28 @@ Device download SHA256 and APK signer matched expected values before installatio
 The unversioned URL may return an older Cloudflare-cached build. Use the immutable
 versioned URL for this installation:
 https://fantest.win/downloads/Family-Touch-Embedded-Tailscale-embedded02-standalone.apk
+
+## embedded03 — single toggle and truthful connection status
+
+Owner requested one Connect/Disconnect button, clear actual network status, and an eventual install-once family flow without provisioning files. The UI/status portion is implemented; automatic enrollment remains unfinished. See docs/FAMILY_CONNECTION_UX.md for the boundary and required owner authorization.
+
+Package win.fantest.familytouch.embedded; versionCode8; versionName0.1.0-embedded03-standalone.
+APK144365900 bytes. SHA25679562ee2f05ea83b8ef67120f5f298ff3be63ebe29b9f7bafbb4cfa1744540d1.
+URL: https://fantest.win/downloads/Family-Touch-Embedded-Tailscale-embedded03-standalone.apk
+Signing certificate unchanged:8b028e6a167011f2d070c333000e23cda90dbc6d6948cc71d83894da4a33ee87.
+HTTPS downloaded bytes matched APK SHA256.
+
+Validation:
+- Added status regression tests: initial red run produced2 expected failures; final22 tests all pass (including7 status tests).
+- Final testEmbeddedUnitTest, assembleEmbedded, lintEmbedded and assembleQa: BUILD SUCCESSFUL1m39s.
+- Lint0 errors,9 existing warnings. apksigner passed.
+- Static review found and corrected startup/shutdown ordering and invitation recomposition; follow-up review found no important/critical issues.
+- Emulator QA update installed. Connect changes to a single Disconnect button; header and Settings show Family setup needed (native NeedsLogin), not Connected.
+- Default Settings contains0 import/export/refresh controls; owner recovery controls are collapsed.
+- Disconnect restores Connect and Disconnected; dumpsys confirms FamilyVpnService stopped. Reconnect returns to the correct unenrolled state, then disconnect stops it again. No app AndroidRuntime crash observed.
+- Race ordering is statically reviewed; a deterministic cancellation-during-JNI instrumentation test was not run. No authenticated tunnel, calls or messages pass is claimed.
+- Verified SM-S938B/qemu0 before deployment. Existing alongside and new APK signing certificates matched; update-in-place returned Success. Device reports versionCode8/versionNameembedded03. Device Download checksum matched.
+- No S25 launch command was issued. notLaunched=false is historical because owner already opened the app; do not claim never launched.
+- Original package and Alpha05 preserved. No uninstall/data wipe performed.
+
+Automatic enrollment is not enabled: no owner-authorized tailnet enrollment backend/API credential exists. User was asked to sign into Tailscale admin on MASTER-PC once; response pending. Owner setup files remain a recovery path, not a solution to the requested install-once flow. Do not claim the full user objective is complete.

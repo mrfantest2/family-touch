@@ -13,6 +13,17 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.NetworkInterface
 
+internal fun selectedPhysicalNetwork(cm: ConnectivityManager): android.net.Network? = cm.allNetworks
+    .filter { cm.getNetworkCapabilities(it)?.let { c ->
+        c.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            c.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+    } == true }
+    .maxByOrNull { network ->
+        val caps = cm.getNetworkCapabilities(network)
+        (if (caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true) 2 else 0) +
+            (if (caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == true) 1 else 0)
+    }
+
 /** Android platform adapter for the pinned upstream BSD-licensed engine. */
 internal class TailscalePlatform(private val context: Context) : AppContext {
     private val prefs by lazy {
@@ -57,9 +68,7 @@ internal class TailscalePlatform(private val context: Context) : AppContext {
     }
     fun underlying(): android.net.Network? {
         val cm = context.getSystemService(ConnectivityManager::class.java)
-        return cm.allNetworks.firstOrNull { cm.getNetworkCapabilities(it)?.let { c ->
-            c.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) && c.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
-        } == true }
+        return selectedPhysicalNetwork(cm)
     }
     override fun bindSocketToNetwork(fd: Int): Boolean = runCatching {
         val network = underlying() ?: return false
@@ -79,7 +88,9 @@ internal class TailscalePlatform(private val context: Context) : AppContext {
 
 internal object EmbeddedTailnet {
     @Volatile private var engine: libtailscale.Application? = null
-    @Volatile var state: String = "Disconnected"
+    @Volatile var status = VpnConnectionStatus("Disconnected")
+    @Volatile var serviceActive = false
+    @Volatile var stopping = false
     @Volatile var tunnelActive = false
     @Synchronized fun engine(context: Context): libtailscale.Application {
         return engine ?: Libtailscale.start(java.io.File(context.noBackupFilesDir, "tailnet").apply { mkdirs() }.absolutePath,

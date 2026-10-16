@@ -23,11 +23,23 @@ import org.json.JSONObject
 internal fun VpnSettings() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var state by remember { mutableStateOf(EmbeddedTailnet.state) }
+    var status by remember { mutableStateOf(EmbeddedTailnet.status) }
+    var active by remember { mutableStateOf(EmbeddedTailnet.serviceActive) }
+    var stopping by remember { mutableStateOf(EmbeddedTailnet.stopping) }
+    var ownerSetup by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     val provisioning = remember { DeviceProvisioning(context) }
-    fun start() { ContextCompat.startForegroundService(context, Intent(context, FamilyVpnService::class.java)) }
+    fun start() {
+        try {
+            EmbeddedTailnet.status = VpnConnectionStatus("Connecting")
+            EmbeddedTailnet.serviceActive = true
+            ContextCompat.startForegroundService(context, Intent(context, FamilyVpnService::class.java))
+        } catch (_: Exception) {
+            EmbeddedTailnet.serviceActive = false
+            EmbeddedTailnet.status = VpnConnectionStatus("Unable to start — try again")
+        }
+    }
     val consent = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         if (it.resultCode == Activity.RESULT_OK) start() else notice = "VPN permission was declined"
     }
@@ -62,19 +74,37 @@ internal fun VpnSettings() {
             finally { busy = false }
         }
     }
-    LaunchedEffect(Unit) { while (true) { state = EmbeddedTailnet.state; delay(1000) } }
-    Text("Embedded private network", style = MaterialTheme.typography.titleLarge)
-    Text(state)
-    Text("Android allows one active VPN. Connecting Family Touch replaces the current VPN for this profile. Only Family Touch traffic uses this tunnel.")
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(enabled = !busy, onClick = {
+    LaunchedEffect(Unit) { while (true) {
+        status = EmbeddedTailnet.status
+        active = EmbeddedTailnet.serviceActive
+        stopping = EmbeddedTailnet.stopping
+        delay(500)
+    } }
+    Text("Family network", style = MaterialTheme.typography.titleLarge)
+    Text(status.label, color = if (status.connected) androidx.compose.ui.graphics.Color(0xFF5DDAA7)
+        else MaterialTheme.colorScheme.onSurface)
+    if (status.connected) Text("Private connection active • ${status.address}")
+    if (status.label == "Family setup needed") {
+        Text("This phone is not connected yet. The family organizer needs to finish network setup. Automatic family enrollment is not available in this build.")
+    }
+    Button(enabled = !busy && !stopping, onClick = {
+        if (active) {
+            EmbeddedTailnet.stopping = true
+            EmbeddedTailnet.status = VpnConnectionStatus("Disconnecting")
+            try { context.startService(Intent(context, FamilyVpnService::class.java).setAction(FamilyVpnService.STOP)) }
+            catch (_: Exception) { EmbeddedTailnet.stopping = false; notice = "Unable to disconnect — try again" }
+        } else {
             val intent = VpnService.prepare(context)
             if (intent != null) consent.launch(intent) else start()
-        }) { Text("Connect") }
-        OutlinedButton(onClick = { context.startService(Intent(context, FamilyVpnService::class.java).setAction(FamilyVpnService.STOP)) }) { Text("Disconnect") }
+        }
+    }) { Text(if (active) "Disconnect" else "Connect") }
+    Text("Android asks for VPN permission once. Connecting replaces another active VPN on this phone.",
+        style = MaterialTheme.typography.bodySmall)
+    TextButton(onClick = { ownerSetup = !ownerSetup }) { Text(if (ownerSetup) "Hide owner setup" else "Owner setup") }
+    if (ownerSetup) {
+        Text("Owner tools for initial enrollment. These file controls are not automatic enrollment; they remain available while family setup is being completed.")
+        OutlinedButton(enabled = !busy, onClick = { export.launch("Family-Touch-device-request.json") }) { Text("Export device request") }
+        OutlinedButton(enabled = !busy, onClick = { import.launch(arrayOf("*/*")) }) { Text("Import encrypted provisioning") }
     }
-    Text("First setup: export this device's public request, then import the encrypted file supplied privately by your tailnet administrator. No Tailscale login screen or separate app is needed.")
-    OutlinedButton(enabled = !busy, onClick = { export.launch("Family-Touch-device-request.json") }) { Text("Export device request") }
-    OutlinedButton(enabled = !busy, onClick = { import.launch(arrayOf("*/*")) }) { Text("Import encrypted provisioning") }
     if (notice.isNotEmpty()) Text(notice)
 }
