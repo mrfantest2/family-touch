@@ -73,7 +73,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme(colorScheme = darkColorScheme(
                 primary = accent, background = bg, surface = surface, onBackground = ink, onSurface = ink
-            )) { FamilyTouchUI(askCallPermissions = { video ->
+            )) { Surface(modifier = Modifier.fillMaxSize(), color = bg, contentColor = ink) { FamilyTouchUI(askCallPermissions = { video ->
                 val permissions = if (video) arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
                     else arrayOf(Manifest.permission.RECORD_AUDIO)
                 val missing = permissions.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
@@ -81,7 +81,7 @@ class MainActivity : ComponentActivity() {
                     askPermissions.launch(missing.toTypedArray())
                     false
                 } else true
-            }) }
+            }) } }
         }
     }
 }
@@ -99,7 +99,7 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean) {
     val active = FamilyStore.activeCall
 
     LaunchedEffect(Unit) { ip.value = Tailnet.vpnIp(context) }
-    Column(Modifier.fillMaxSize().background(bg)) {
+    Column(Modifier.fillMaxSize().background(bg).statusBarsPadding().navigationBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 18.dp, bottom = 14.dp),
             verticalAlignment = Alignment.CenterVertically) {
             if (selectedPeer != null && active == null) IconButton(onClick = { FamilyStore.selectedPeer = null }) {
