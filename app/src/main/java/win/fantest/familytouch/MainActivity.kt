@@ -370,11 +370,11 @@ private fun CallControls(onHangup: () -> Unit, modifier: Modifier = Modifier) {
     val muted = CallController.microphoneMuted
     Row(modifier.fillMaxWidth().padding(horizontal = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        OutlinedButton(onClick = { CallController.setSpeakerEnabled(!speaker) }, modifier = Modifier.weight(1f),
+        OutlinedButton(onClick = { CallController.selectSpeakerRoute(!speaker) }, modifier = Modifier.weight(1f),
             contentPadding = PaddingValues(horizontal = 4.dp)) {
             Text(if (speaker) "Speaker on" else "Earpiece", fontSize = 11.sp, maxLines = 1)
         }
-        OutlinedButton(onClick = { CallController.setMicrophoneMuted(!muted) }, modifier = Modifier.weight(1f),
+        OutlinedButton(onClick = { CallController.toggleMicrophoneMute(!muted) }, modifier = Modifier.weight(1f),
             contentPadding = PaddingValues(horizontal = 4.dp)) {
             Text(if (muted) "Unmute" else "Mute mic", fontSize = 11.sp, maxLines = 1)
         }
