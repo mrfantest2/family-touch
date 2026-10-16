@@ -68,7 +68,7 @@ class PeerService : Service() {
         val builder = NotificationCompat.Builder(this, c).setSmallIcon(android.R.drawable.stat_notify_chat)
             .setContentTitle(title).setContentText(text).setContentIntent(openApp()).setAutoCancel(true)
         if (call) {
-            builder.setCategory(NotificationCompat.CATEGORY_CALL).priority = NotificationCompat.PRIORITY_HIGH
+            builder.setCategory(NotificationCompat.CATEGORY_CALL).setPriority(NotificationCompat.PRIORITY_HIGH)
         }
         nm.notify((System.currentTimeMillis() % 100000).toInt() + 100, builder.build())
     }
