@@ -31,4 +31,4 @@ Automatic approval review rejected the combined enrollment-server startup/API-pr
 
 Next: resolve the pending credential/access confirmation and deployment rejection; isolate app-tag traffic while preserving existing account access; configure DPAPI broker via its local password form, deploy only the API proxy (never /admin), establish same-user persistent startup, validate two real app identities through registration/discovery/messages/media/calls/restart, then promote the verified final alias. Existing Alpha05 and final alias are not overwritten by this candidate.
 
-Delivery verification: HTTPS re-download matched the full SHA256 above. Physical S25 SM-S938B/qemu0 update-in-place returned Success; dumpsys verifies versionCode10. No launch command was issued. Download-folder copy verification is recorded separately when complete.
+Delivery verification: HTTPS re-download matched the full SHA256 above. Physical S25 SM-S938B/qemu0 update-in-place returned Success; dumpsys verifies versionCode10. No launch command was issued. The S25 Download-folder copy also matches the full SHA256.

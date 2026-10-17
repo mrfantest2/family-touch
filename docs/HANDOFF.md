@@ -18,3 +18,5 @@ S25 latest verified read-only identity: local ADB100.99.16.99:5555, SM-S938B, ro
 Build environment/signing outsideGit documented in EMBEDDED_TAILSCALE_PLAN.md. Java21 with JAVA_TOOL_OPTIONS=-Djdk.net.unixdomain.tmpdir=C:/Temp/nonexistent-family-touch and quoted -Pkotlin.compiler.execution.strategy=in-process. Private signing inputs remain C:/Khalil/Signing/FamilyTouch; never print password. Latest logs outsiderepo embedded05-final-build.log and directory-green.log. Existing calls/messages/attachments use TCP48321 and per-pair tokens; broker sync proves signing identity on that port. Automatic roster applies on Main dispatcher, removes revoked managed contacts while preserving history.
 
 Delivery update: candidate HTTPS download matched SHA256; local authorized S25 ADB update-in-place succeeded, dumpsys version10/embedded05 confirmed. No app launch command. Original app preserved.
+
+S25 Download/Family-Touch-embedded05-candidate.apk also verified SHA256 matching the candidate; deployment process exited0. Implementation pushed as3f270cdb0f4897b6d0a9f64a8faa34ba86f05e16. Android and Windows broker CI queued at that commit; no claim of CI completion.
