@@ -35,10 +35,7 @@ object Tailnet {
         return String(data, 0, length, Charsets.UTF_8)
     }
 
-    fun isTailIp(ip: String): Boolean {
-        val parts = ip.split(".").mapNotNull { it.toIntOrNull() }
-        return parts.size == 4 && parts.all { it in 0..255 } && parts[0] == 100 && parts[1] in 64..127
-    }
+    fun isTailIp(ip: String): Boolean = DirectorySecurity.isPrivateIp(ip)
 
     fun vpnIp(context: Context): String? {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -64,7 +61,7 @@ object Tailnet {
         val json = JSONObject(decoded)
         require(json.getInt("v") == 1) { "Unsupported invitation version" }
         val ip = json.getString("ip")
-        require(isTailIp(ip)) { "Peer must have a valid Tailscale IPv4 address" }
+        require(isTailIp(ip)) { "Peer must have a valid private network IPv4 address" }
         val id = json.getString("id")
         val secret = json.getString("secret")
         require(id.length in 20..80 && secret.length >= 32) { "Invalid invitation identity" }
@@ -72,9 +69,9 @@ object Tailnet {
     }
 
     suspend fun send(peer: Peer, type: String, payload: JSONObject = JSONObject()): JSONObject = withContext(Dispatchers.IO) {
-        require(isTailIp(peer.ip)) { "Tailscale-only connections" }
+        require(isTailIp(peer.ip)) { "private network-only connections" }
         val ctx = requireNotNull(appContext) { "Family Touch networking is not initialized" }
-        check(vpnIp(ctx) != null) { "Connect to Tailscale before messaging or calling" }
+        check(vpnIp(ctx) != null) { "Connect to private network before messaging or calling" }
         val req = JSONObject().put("type", type).put("id", FamilyStore.deviceId)
             .put("nick", FamilyStore.nickname).put("secret", peer.secret)
         for (key in payload.keys()) {

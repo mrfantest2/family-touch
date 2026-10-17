@@ -35,6 +35,14 @@ class PeerService : Service() {
         super.onCreate()
         FamilyStore.init(this)
         Tailnet.init(this)
+        scope.launch {
+            while (isActive) {
+                try { FamilyDirectory.sync(this@PeerService) }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { /* Keep saved peers during temporary directory outages. */ }
+                delay(20000)
+            }
+        }
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         nm.createNotificationChannel(NotificationChannel(channel, "Family Touch background connection",
             NotificationManager.IMPORTANCE_LOW).apply {
@@ -51,12 +59,12 @@ class PeerService : Service() {
             startForeground(40, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING)
         else startForeground(40, notification)
         scope.launch {
-            var wasConnected = Tailnet.vpnIp(this@PeerService) != null
+            var previous = EmbeddedTailnet.status
             while (isActive) {
-                delay(60_000)
-                val connected = Tailnet.vpnIp(this@PeerService) != null
-                if (wasConnected != connected) {
-                    wasConnected = connected
+                delay(5_000)
+                val current = EmbeddedTailnet.status
+                if (previous != current) {
+                    previous = current
                     nm.notify(NotificationIds.CONNECTION, connectionNotification())
                 }
             }
@@ -101,12 +109,11 @@ class PeerService : Service() {
     }
 
     private fun connectionNotification(): Notification {
-        val connected = Tailnet.vpnIp(this) != null
+        val connected = EmbeddedTailnet.status.connected
         return NotificationCompat.Builder(this, channel)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
-            .setContentTitle(if (connected) "Family Touch connected" else "Family Touch needs Tailscale")
-            .setContentText(if (connected) "Connected through Tailscale • Messages and calls ready"
-                else "Connect Tailscale to receive private messages and calls")
+            .setContentTitle(if (connected) "Family Touch connected" else "Family Touch private connection")
+            .setContentText(if (connected) "Private messages and calls ready" else EmbeddedTailnet.status.label)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setSilent(true)
@@ -138,11 +145,18 @@ class PeerService : Service() {
             s.soTimeout = 8000
             try {
                 val ip = s.inetAddress.hostAddress.orEmpty()
-                require(Tailnet.isTailIp(ip)) { "Tailscale peers only" }
-                check(Tailnet.vpnIp(this@PeerService) != null) { "Connect Tailscale before accepting peer traffic" }
+                require(Tailnet.isTailIp(ip)) { "private network peers only" }
+                check(Tailnet.vpnIp(this@PeerService) != null) { "Connect private network before accepting peer traffic" }
                 val input = s.getInputStream().buffered()
                 val line = Tailnet.readWireLine(input)
                 val json = JSONObject(line)
+                if (json.optString("type") == "identity_probe") {
+                    check(EmbeddedTailnet.status.connected) { "Private connection is not ready" }
+                    val response = JSONObject().put("ok", true).put("device", FamilyIdentity.fingerprint())
+                        .put("signature", FamilyIdentity.probe(json.getString("challenge")))
+                    s.getOutputStream().write((response.toString() + "\n").toByteArray(Charsets.UTF_8))
+                    return
+                }
                 val id = json.getString("id")
                 val type = json.getString("type")
                 val secret = json.getString("secret")
@@ -159,7 +173,7 @@ class PeerService : Service() {
                     if (ip != peer.ip || json.optString("nick") != peer.name) {
                         FamilyStore.upsert(peer.copy(ip = ip, name = json.optString("nick", peer.name).take(36)))
                     }
-                    when (type) {
+                    val reply: Any = when (type) {
                         "attachment" -> {
                             s.soTimeout = 90_000
                             val item = AttachmentTransport.receive(this@PeerService, input, json, id)
@@ -189,13 +203,14 @@ class PeerService : Service() {
                                 FamilyStore.addChat(ChatItem(messageId, id, false, txt, System.currentTimeMillis(), true))
                                 showNotification(json.optString("nick", "Family Touch"), txt.take(100), peerId = id)
                             }
+                            JSONObject()
                         }
                         "offer", "answer", "ice", "hangup" -> CallController.receive(type, id, json) { who ->
                             showNotification("Incoming Family Touch call", who, true)
                         }
                         else -> error("Unsupported request")
                     }
-                    JSONObject()
+                    if (reply is JSONObject) reply else JSONObject()
                 }
                 val body = result.put("ok", true).toString() + "\n"
                 s.getOutputStream().write(body.toByteArray(Charsets.UTF_8))

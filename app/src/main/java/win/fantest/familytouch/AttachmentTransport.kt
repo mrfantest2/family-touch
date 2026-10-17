@@ -52,7 +52,7 @@ object AttachmentTransport {
     suspend fun send(context: Context, peer: Peer, uris: List<Uri>, onSent: (ChatItem) -> Unit) =
         withContext(Dispatchers.IO) {
             require(uris.size in 1..MAX_BATCH) { "Select 1 to 10 attachments" }
-            require(Tailnet.vpnIp(context) != null) { "Connect Tailscale first" }
+            require(Tailnet.vpnIp(context) != null) { "Connect private network first" }
             uris.forEach { uri ->
                 val resolver = context.contentResolver
                 val mime = resolver.getType(uri).orEmpty().lowercase()

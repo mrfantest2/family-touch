@@ -185,7 +185,7 @@ object CallController {
                     connectedSinceMs = System.currentTimeMillis()
                 }
                 if (state == PeerConnection.IceConnectionState.FAILED && !closing && FamilyStore.activeCall != null) {
-                    FamilyStore.lastError = "Call network interrupted. Confirm both devices are connected to Tailscale."
+                    FamilyStore.lastError = "Call network interrupted. Confirm both devices have their private connection turned on."
                 }
             }
             override fun onIceConnectionReceivingChange(receiving: Boolean) {}

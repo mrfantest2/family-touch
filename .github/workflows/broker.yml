@@ -1,0 +1,25 @@
+name: Enrollment broker validation
+on:
+  push:
+    branches: [main, feature/embedded-tailscale]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  broker:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: broker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: broker/go.mod
+          cache: false
+      - run: go test -count=1 ./...
+      - run: go vet ./...
+      - run: go build ./...

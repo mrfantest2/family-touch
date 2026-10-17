@@ -118,7 +118,6 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFinished: () -> Unit) {
     var tab by remember { mutableIntStateOf(0) }
-    var addPeerDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var networkStatus by remember { mutableStateOf(EmbeddedTailnet.status) }
@@ -145,9 +144,7 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
                 Text(networkStatus.label,
                     fontSize = 12.sp, color = if (networkStatus.connected) Color(0xFF5DDAA7) else Color(0xFFFFC466))
             }
-            if (tab == 2 && selectedPeer == null) IconButton(onClick = { addPeerDialog = true }) {
-                Icon(Icons.Outlined.Add, "Pair new contact")
-            }
+
         }
         HorizontalDivider(color = Color(0xFF20364B))
         if (active != null) {
@@ -163,7 +160,7 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
                     1 -> CallsPage(contacts) { peer, video ->
                         if (askCallPermissions(video)) CallController.start(peer, video)
                     }
-                    2 -> ContactsPage(contacts, onOpen = { FamilyStore.selectedPeer = it; tab = 0 }, onPair = { addPeerDialog = true })
+                    2 -> ContactsPage(contacts, onOpen = { FamilyStore.selectedPeer = it; tab = 0 })
                     else -> SettingsPage(networkStatus)
                 }
             }
@@ -180,6 +177,13 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
         }
     }
 
+    if (!FamilyStore.needsNicknamePrompt && !networkStatus.connected && incoming == null && active == null) {
+        AlertDialog(onDismissRequest = {}, title = { Text("Turn on your private connection") },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Family Touch needs VPN permission for private calls and messages. Your family devices will appear automatically.")
+                VpnSettings()
+            } }, confirmButton = {})
+    }
     if (FamilyStore.needsNicknamePrompt && incoming == null && active == null) {
         var nickname by rememberSaveable { mutableStateOf(FamilyStore.nickname.take(36)) }
         fun finish(value: String?) {
@@ -202,39 +206,12 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
     if (incoming != null && active == null) {
         val peerName = FamilyStore.find(incoming.peerId)?.name ?: "Family device"
         AlertDialog(onDismissRequest = {}, title = { Text("Incoming " + (if (incoming.isVideo) "video" else "voice") + " call") },
-            text = { Text(peerName + " is calling over your private Tailscale network.") },
+            text = { Text(peerName + " is calling over your private family network.") },
             confirmButton = {
                 Button(onClick = { if (askCallPermissions(incoming.isVideo)) CallController.accept() }) { Text("Answer") }
             }, dismissButton = {
                 TextButton(onClick = { CallController.hangup() }) { Text("Decline") }
             })
-    }
-    if (addPeerDialog) {
-        var code by remember { mutableStateOf("") }
-        var busy by remember { mutableStateOf(false) }
-        var error by remember { mutableStateOf("") }
-        AlertDialog(onDismissRequest = { if (!busy) addPeerDialog = false }, title = { Text("Pair family device") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("On the other device: Settings → Copy invitation. Both devices must be logged in to Tailscale.",
-                        fontSize = 13.sp, color = muted)
-                    OutlinedTextField(value = code, onValueChange = { code = it.trim() },
-                        label = { Text("FT1 invitation code") }, minLines = 2, maxLines = 5)
-                    if (error.isNotEmpty()) Text(error, color = Color(0xFFFF9898), fontSize = 13.sp)
-                }
-            }, confirmButton = {
-                Button(enabled = !busy && code.isNotBlank(), onClick = {
-                    busy = true
-                    scope.launch {
-                        try {
-                            val peer = Tailnet.parseInvitation(code)
-                            Tailnet.pair(peer)
-                            addPeerDialog = false
-                        } catch (ex: Exception) { error = ex.message.orEmpty() }
-                        finally { busy = false }
-                    }
-                }) { Text(if (busy) "Pairing..." else "Pair") }
-            }, dismissButton = { TextButton(onClick = { addPeerDialog = false }) { Text("Cancel") } })
     }
     if (FamilyStore.lastError.isNotBlank()) {
         AlertDialog(onDismissRequest = { FamilyStore.lastError = "" },
@@ -254,7 +231,7 @@ private fun SurfaceLogo() {
 
 @Composable
 private fun ChatsPage(peers: List<Peer>, onOpen: (String) -> Unit) {
-    if (peers.isEmpty()) EmptyState("Welcome to Family Touch", "Pair another device from Contacts to start messaging your family.")
+    if (peers.isEmpty()) EmptyState("Welcome to Family Touch", "Your family devices appear automatically after connecting.")
     else LazyColumn(contentPadding = PaddingValues(vertical = 8.dp)) {
         items(peers, key = { it.id }) { peer ->
             val message = FamilyStore.messages.lastOrNull { it.peerId == peer.id }
@@ -272,7 +249,7 @@ private fun CallsPage(peers: List<Peer>, onCall: (Peer, Boolean) -> Unit) {
                 fontWeight = FontWeight.Bold, fontSize = 18.sp)
         }
         if (peers.isEmpty()) item {
-            Text("Pair a family device to call privately.", Modifier.padding(18.dp), color = muted)
+            Text("Your family devices appear automatically after connecting.", Modifier.padding(18.dp), color = muted)
         }
         items(peers, key = { "contact-" + it.id }) { peer ->
             Row(Modifier.fillMaxWidth().padding(horizontal = 15.dp, vertical = 8.dp),
@@ -328,12 +305,9 @@ private fun durationText(ms: Long): String {
 }
 
 @Composable
-private fun ContactsPage(peers: List<Peer>, onOpen: (String) -> Unit, onPair: () -> Unit) {
+private fun ContactsPage(peers: List<Peer>, onOpen: (String) -> Unit) {
     Column(Modifier.fillMaxSize()) {
-        Button(onClick = onPair, modifier = Modifier.fillMaxWidth().padding(16.dp), shape = RoundedCornerShape(14.dp)) {
-            Icon(Icons.Outlined.Add, null); Spacer(Modifier.width(8.dp)); Text("Add a family device")
-        }
-        if (peers.isEmpty()) EmptyState("Private family circle", "Only invited devices from your Tailscale network appear here.")
+        if (peers.isEmpty()) EmptyState("Private family circle", "Registered family devices appear automatically after connecting.")
         else LazyColumn {
             items(peers, key = { it.id }) { peer ->
                 PeerRow(peer, peer.ip, onClick = { onOpen(peer.id) })
@@ -580,7 +554,6 @@ private fun SettingsPage(networkStatus: VpnConnectionStatus) {
             }
         } catch (e: Exception) { FamilyStore.lastError = "Picture selection failed: " + e.message }
     }
-    val code = if (networkStatus.connected) Tailnet.invitation(context) else null
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(17.dp)) {
         Text("Your device", fontSize = 21.sp, fontWeight = FontWeight.Bold)
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -600,21 +573,7 @@ private fun SettingsPage(networkStatus: VpnConnectionStatus) {
         HorizontalDivider(color = Color(0xFF24415C))
         VpnSettings()
         HorizontalDivider(color = Color(0xFF24415C))
-        Text("Invite a family device", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-        Text("Share this code privately with a trusted person who is already on your Tailscale network. Never post it publicly.",
-            color = muted, fontSize = 13.sp)
-        if (code != null) {
-            OutlinedButton(onClick = {
-                val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                cb.setPrimaryClip(ClipData.newPlainText("Family Touch invitation", code))
-            }) {
-                Icon(Icons.Outlined.ContentCopy, null); Spacer(Modifier.width(8.dp)); Text("Copy invitation code")
-            }
-        } else {
-            Text("Connect Tailscale to generate an invitation.", color = Color(0xFFFFC466), fontSize = 13.sp)
-        }
-        Text("Port " + Tailnet.PORT + " • No hosted application server • Messages stored on devices",
-            color = muted, fontSize = 12.sp)
+        Text("Family devices appear automatically after connecting. Messages stay on your devices.", color = muted, fontSize = 13.sp)
     }
 }
 
@@ -681,7 +640,7 @@ private fun CallPage(call: CallInvite, onHangup: () -> Unit) {
             Avatar(name)
             Spacer(Modifier.height(20.dp))
             Text(name, fontWeight = FontWeight.Bold, fontSize = 27.sp)
-            Text("Private Tailscale voice call", color = muted, fontSize = 13.sp)
+            Text("Private voice call", color = muted, fontSize = 13.sp)
             Spacer(Modifier.height(8.dp))
             Text(timer, fontSize = 20.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.height(55.dp))

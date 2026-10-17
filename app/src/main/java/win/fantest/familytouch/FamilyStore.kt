@@ -145,6 +145,18 @@ object FamilyStore {
 
     fun find(id: String): Peer? = peers.firstOrNull { it.id == id }
 
+    fun applyDirectory(roster: List<Peer>) {
+        DirectorySecurity.validateRoster(roster, deviceId)
+        val prefs = context.getSharedPreferences("identity", Context.MODE_PRIVATE)
+        val managed = prefs.getStringSet("directoryPeers", emptySet()).orEmpty()
+        val ids = roster.map { it.id }.toSet()
+        peers.removeAll { it.id in managed && it.id !in ids }
+        roster.forEach { upsert(it) }
+        val a = JSONArray()
+        peers.forEach { a.put(JSONObject().put("id", it.id).put("name", it.name).put("ip", it.ip).put("secret", it.secret)) }
+        prefs.edit().putStringSet("directoryPeers", ids).putString("peers", a.toString()).apply()
+    }
+
     fun upsert(peer: Peer) {
         if (peer.id == deviceId || peer.ip.isBlank()) return
         val index = peers.indexOfFirst { it.id == peer.id }

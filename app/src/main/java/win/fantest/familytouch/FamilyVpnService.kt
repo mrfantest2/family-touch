@@ -71,20 +71,36 @@ class FamilyVpnService : VpnService(), libtailscale.IPNService {
             try {
                 EmbeddedTailnet.engine(this@FamilyVpnService)
                 engineReady = true
+                FamilyStore.init(this@FamilyVpnService)
                 ensureActive()
                 Libtailscale.requestVPN(this@FamilyVpnService)
                 ensureActive()
                 updateNetwork()
                 ensureActive()
-                EmbeddedTailnet.api(this@FamilyVpnService, "PATCH", "prefs", JSONObject().put("WantRunning", true).put("WantRunningSet", true))
+                EmbeddedTailnet.api(this@FamilyVpnService, "PATCH", "prefs", JSONObject().put("WantRunning", true).put("WantRunningSet", true)
+                    .put("Hostname", "familytouch-" + FamilyIdentity.fingerprint().take(12)).put("HostnameSet", true))
                 ensureActive()
+                var nextEnrollment = 0L
+                var registered = false
+                var registrationLabel = "Registering this device"
                 while (isActive) {
                     val status = EmbeddedTailnet.api(this@FamilyVpnService, "GET", "status")
                     ensureActive()
                     val addresses = status.optJSONArray("TailscaleIPs")
                     val nodeIp = (0 until (addresses?.length() ?: 0)).map { addresses!!.optString(it) }
                         .firstOrNull { Tailnet.isTailIp(it) }
-                    val next = VpnConnectionStatus.fromBackend(status.optString("BackendState"),
+                    val backend = status.optString("BackendState")
+                    val needsAuth = backend == "NeedsLogin" || backend == "NoState"
+                    if ((!registered || needsAuth) && System.currentTimeMillis() >= nextEnrollment) {
+                        nextEnrollment = System.currentTimeMillis() + 30000
+                        registrationLabel = try {
+                            FamilyDirectory.enroll(this@FamilyVpnService, needsAuth).also {
+                                registered = it == "Connecting"
+                            }
+                        } catch (_: Exception) { "Family registration unavailable — retrying" }
+                        ensureActive()
+                    }
+                    val next = if (needsAuth) VpnConnectionStatus(registrationLabel) else VpnConnectionStatus.fromBackend(backend,
                         EmbeddedTailnet.tunnelActive, nodeIp, Tailnet.vpnIp(this@FamilyVpnService),
                         selectedPhysicalNetwork(cm)?.let { cm.getNetworkCapabilities(it)
                             ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) } == true)
