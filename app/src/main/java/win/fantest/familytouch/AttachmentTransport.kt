@@ -39,12 +39,22 @@ object AttachmentTransport {
         } catch (_: Exception) { null }
     }
     fun open(context: Context, info: Info) {
-        val file = File(dir(context), info.id + ".bin")
-        require(file.isFile && file.length() == info.size) { "File is missing or incomplete" }
-        val uri = FileProvider.getUriForFile(context, context.packageName + ".files", file)
+        val uri = localUri(context, info)
         val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, info.mime)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)
+    }
+    fun localUri(context: Context, info: Info): Uri {
+        validatedId(info.id)
+        val file = File(dir(context), info.id + ".bin")
+        require(file.isFile && file.length() == info.size) { "File is missing or incomplete" }
+        return FileProvider.getUriForFile(context, context.packageName + ".files", file)
+    }
+    fun share(context: Context, info: Info) {
+        val intent = Intent(Intent.ACTION_SEND).setType(info.mime)
+            .putExtra(Intent.EXTRA_STREAM, localUri(context, info))
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        context.startActivity(Intent.createChooser(intent, "Share " + info.name))
     }
     private fun digest() = MessageDigest.getInstance("SHA-256")
     private fun toHex(bytes: ByteArray) = bytes.joinToString("") { "%02x".format(it) }

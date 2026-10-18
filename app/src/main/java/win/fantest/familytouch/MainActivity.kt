@@ -19,6 +19,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -127,6 +128,23 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
     val selectedPeer = FamilyStore.selectedPeer?.let { FamilyStore.find(it) }
     val incoming = FamilyStore.incomingCall
     val active = FamilyStore.activeCall
+    var confirmBack by remember { mutableStateOf(false) }
+    BackHandler {
+        when {
+            active != null -> confirmBack = true
+            FamilyStore.selectedPeer != null -> FamilyStore.selectedPeer = null
+            tab != 0 -> tab = 0
+            else -> confirmBack = true
+        }
+    }
+    if (confirmBack) AlertDialog(onDismissRequest = { confirmBack = false },
+        title = { Text(if (active != null) "Keep this call running?" else "Leave Family Touch?") },
+        text = { Text("You can keep Family Touch open or minimize it without disconnecting your private connection.") },
+        confirmButton = { TextButton(onClick = {
+            confirmBack = false
+            (context as? android.app.Activity)?.moveTaskToBack(true)
+        }) { Text("Minimize") } },
+        dismissButton = { TextButton(onClick = { confirmBack = false }) { Text("Keep open") } })
 
     LaunchedEffect(Unit) { while (true) {
         networkStatus = EmbeddedTailnet.status
@@ -371,6 +389,11 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
     var locationPreview by remember { mutableStateOf<String?>(null) }
     var locationBusy by remember { mutableStateOf(false) }
     var sendingMedia by remember { mutableStateOf(false) }
+    var viewedMedia by remember(peer.id) { mutableStateOf<AttachmentTransport.Info?>(null) }
+    viewedMedia?.let { ChatMediaViewer(it) { viewedMedia = null } }
+    var locationJob by remember(peer.id) { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var locationDetails by remember(peer.id) { mutableStateOf("") }
+    DisposableEffect(peer.id) { onDispose { locationJob?.cancel() } }
     val selectMedia = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.size > AttachmentTransport.MAX_BATCH)
@@ -406,29 +429,21 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
     }
     val requestLocation: () -> Unit = {
         locationBusy = true
-        try {
-            val manager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-            val provider = if (manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER))
-                LocationManager.NETWORK_PROVIDER else LocationManager.GPS_PROVIDER
-            if (Build.VERSION.SDK_INT >= 30) {
-                manager.getCurrentLocation(provider, null, context.mainExecutor) { loc ->
-                    locationBusy = false
-                    if (loc == null) FamilyStore.lastError = "Could not obtain a location. Enable Location in Android settings."
-                    else locationPreview = "https://www.google.com/maps?q=" +
-                        String.format(Locale.US, "%.6f,%.6f", loc.latitude, loc.longitude)
-                }
-            } else {
-                val last = manager.getLastKnownLocation(provider)
-                locationBusy = false
-                if (last != null && System.currentTimeMillis() - last.time < 120000L)
-                    locationPreview = "https://www.google.com/maps?q=" +
-                        String.format(Locale.US, "%.6f,%.6f", last.latitude, last.longitude)
-                else FamilyStore.lastError = "No recent location available; enable device Location."
+        locationJob?.cancel()
+        locationJob = scope.launch {
+            try {
+                val loc = LocationShareController.request(context)
+                locationPreview = "https://www.google.com/maps?q=" +
+                    String.format(Locale.US, "%.6f,%.6f", loc.latitude, loc.longitude)
+                locationDetails = "Accuracy about ${loc.accuracy.toInt()} m · " +
+                    DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(loc.time))
+            } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
+                FamilyStore.lastError = "No fresh location within 30 seconds. Check Location settings and try again."
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (_: Exception) {
+                FamilyStore.lastError = "Location unavailable. Check Android Location and permissions."
+            } finally { locationBusy = false }
             }
-        } catch (e: Exception) {
-            locationBusy = false
-            FamilyStore.lastError = "Location unavailable: " + e.message
-        }
     }
     val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         if (it) requestLocation() else FamilyStore.lastError = "Location permission was declined."
@@ -438,7 +453,7 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
         AlertDialog(onDismissRequest = { locationPreview = null },
             title = { Text("Share your location?") },
             text = { Text("Send this one-time map location to " + peer.name +
-                "? It will remain in the chat history. This does not enable live tracking.") },
+                "? $locationDetails. It will remain in chat history. This does not enable live tracking.") },
             confirmButton = {
                 Button(onClick = {
                     locationPreview?.let { url -> sendChat("Location: " + url) }
@@ -468,9 +483,7 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
                                 fontSize = 11.sp, color = Color(0xFFBFDBEF))
                             Text("Tap to open attachment", color = Color(0xFFACE1FF),
                                 modifier = Modifier.clickable {
-                                    try { AttachmentTransport.open(context, attachment) }
-                                    catch (e: Exception) { FamilyStore.lastError =
-                                        "Cannot open attachment: " + e.message }
+                                    viewedMedia = attachment
                                 })
                         } else if (msg.text.startsWith("Location: https://www.google.com/maps?q=")) {
                             Text("Shared location", color = Color.White)
