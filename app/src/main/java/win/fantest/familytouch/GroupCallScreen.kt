@@ -34,6 +34,10 @@ internal fun GroupCallScreen(call: GroupCallInvite) {
                 }
             }
         }
+        RecordingControls(call.video)
+        if (call.video) TextButton(onClick = { GroupCallController.toggleCamera() }) {
+            Text(if (GroupCallController.cameraEnabled) "Turn camera off" else "Turn camera on")
+        }
         Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { GroupCallController.mute() }, Modifier.weight(1f)) {
                 Text(if (GroupCallController.micMuted) "Unmute" else "Mute")
@@ -54,7 +58,7 @@ private fun GroupVideoTile(track: VideoTrack, mirror: Boolean, modifier: Modifie
         renderer.setMirror(mirror)
         renderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
         track.addSink(renderer)
-        onDispose { track.removeSink(renderer); renderer.release() }
+        onDispose { try { runCatching { track.removeSink(renderer) } } finally { renderer.release() } }
     }
     AndroidView(factory = { renderer }, modifier = modifier.fillMaxWidth())
 }

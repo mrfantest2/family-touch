@@ -94,6 +94,7 @@ object CallController {
         private set
 
     private fun routeAudioToCall(video: Boolean) {
+        CallForegroundService.begin(context, video)
         val manager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         audioManager = manager
         previousAudioMode = manager.mode
@@ -126,6 +127,7 @@ object CallController {
     }
 
     private fun restoreAudio() {
+        if (::context.isInitialized) CallForegroundService.end(context)
         val manager = audioManager ?: return
         if (Build.VERSION.SDK_INT >= 31) manager.clearCommunicationDevice()
         @Suppress("DEPRECATION")
@@ -143,6 +145,10 @@ object CallController {
     internal val peerFactory get() = factory
     internal fun beginGroupAudio(video: Boolean) = routeAudioToCall(video)
     internal fun endGroupAudio() = restoreAudio()
+    internal fun recordingTracks(): Map<String, VideoTrack> = buildMap {
+        localVideo?.let { put(FamilyStore.deviceId, it) }
+        currentPeer?.id?.let { id -> remoteVideo?.let { put(id, it) } }
+    }
 
     @Synchronized
     fun init(ctx: Context) {
@@ -150,7 +156,10 @@ object CallController {
         context = ctx.applicationContext
         PeerConnectionFactory.initialize(PeerConnectionFactory.InitializationOptions.builder(context).createInitializationOptions())
         egl = EglBase.create()
-        val adm = JavaAudioDeviceModule.builder(context).createAudioDeviceModule()
+        val adm = JavaAudioDeviceModule.builder(context)
+            .setSamplesReadyCallback { CallRecordingEngine.samples(true, it) }
+            .setPlaybackSamplesReadyCallback { CallRecordingEngine.samples(false, it) }
+            .createAudioDeviceModule()
         factory = PeerConnectionFactory.builder()
             .setAudioDeviceModule(adm)
             .setVideoEncoderFactory(DefaultVideoEncoderFactory(egl.eglBaseContext, true, true))
@@ -190,6 +199,8 @@ object CallController {
                 if (state == PeerConnection.IceConnectionState.FAILED && !closing && FamilyStore.activeCall != null) {
                     FamilyStore.lastError = "Call network interrupted. Confirm both devices have their private connection turned on."
                 }
+                if (state == PeerConnection.IceConnectionState.FAILED || state == PeerConnection.IceConnectionState.DISCONNECTED)
+                    io.launch(Dispatchers.Main) { RecordingCoordinator.stop("Call connection interrupted") }
             }
             override fun onIceConnectionReceivingChange(receiving: Boolean) {}
             override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {}
@@ -243,7 +254,7 @@ object CallController {
             check(GroupCallController.session == null && GroupCallController.incoming == null) { "Already in a group call" }
             prepare(peer, video)
             beginLog(video, true)
-            FamilyStore.activeCall = CallInvite(peer.id, video, outgoing = true)
+            FamilyStore.activeCall = CallInvite(peer.id, video, outgoing = true, sessionId = UUID.randomUUID().toString())
             io.launch {
                 delay(45_000L)
                 if (currentPeer?.id == peer.id && connectedSinceMs == null &&
@@ -313,6 +324,7 @@ object CallController {
 
     private fun signal(type: String, body: JSONObject) {
         val peer = currentPeer ?: return
+        FamilyStore.activeCall?.sessionId?.takeIf { it.isNotBlank() }?.let { body.put("callSession", it) }
         io.launch { try { Tailnet.send(peer, type, body) } catch (e: Exception) { FamilyStore.lastError = "Call signaling: " + e.message } }
     }
 
@@ -322,7 +334,8 @@ object CallController {
                 if (FamilyStore.activeCall != null || FamilyStore.incomingCall != null ||
                     GroupCallController.session != null || GroupCallController.incoming != null) return
                 val peer = FamilyStore.find(peerId) ?: return
-                FamilyStore.incomingCall = CallInvite(peerId, data.optBoolean("video"), data.getString("sdp"))
+                FamilyStore.incomingCall = CallInvite(peerId, data.optBoolean("video"), data.getString("sdp"),
+                    sessionId = data.optString("callSession"))
                 alert(peer.name + " is calling")
                 val pendingOffer = FamilyStore.incomingCall
                 io.launch {
@@ -378,6 +391,7 @@ object CallController {
     }
 
     private fun clear(notify: Boolean) {
+        RecordingCoordinator.stop("Call ended")
         closing = true
         RingtonePlayer.stop()
         if (::context.isInitialized) {

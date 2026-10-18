@@ -15,7 +15,8 @@ import java.util.UUID
 data class Peer(val id: String, val name: String, val ip: String, val secret: String)
 data class ChatItem(val id: String, val peerId: String, val outgoing: Boolean, val text: String, val time: Long, val delivered: Boolean,
     val senderId: String = "")
-data class CallInvite(val peerId: String, val isVideo: Boolean, val offer: String = "", val outgoing: Boolean = false)
+data class CallInvite(val peerId: String, val isVideo: Boolean, val offer: String = "", val outgoing: Boolean = false,
+    val sessionId: String = "")
 data class CallLogRecord(val id: String, val peerId: String, val isVideo: Boolean, val outgoing: Boolean,
     val startedAt: Long, val connectedAt: Long, val endedAt: Long, val outcome: String) {
     val durationMs: Long get() = if (connectedAt > 0L) (endedAt - connectedAt).coerceAtLeast(0L) else 0L

@@ -102,6 +102,7 @@ class MainActivity : ComponentActivity() {
         }
         CallController.init(this)
         GroupCallController.init(this)
+        CallRecordingEngine.init(this)
         try { ContextCompat.startForegroundService(this, Intent(this, PeerService::class.java)) }
         catch (ex: Exception) { FamilyStore.lastError = "Service: " + ex.message }
         if (!FamilyStore.needsNicknamePrompt) requestNotificationPermission()
@@ -124,6 +125,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFinished: () -> Unit) {
     var tab by remember { mutableIntStateOf(0) }
+    var recordingsLibrary by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var networkStatus by remember { mutableStateOf(EmbeddedTailnet.status) }
@@ -135,6 +137,7 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
     val active = FamilyStore.activeCall
     val groupCall = GroupCallController.session
     val groupIncoming = GroupCallController.incoming
+    RecordingPermissionDialog()
     var confirmBack by remember { mutableStateOf(false) }
     BackHandler {
         when {
@@ -174,7 +177,9 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
 
         }
         HorizontalDivider(color = Color(0xFF20364B))
-        if (groupCall != null) {
+        if (recordingsLibrary) {
+            RecordingLibraryScreen { recordingsLibrary = false }
+        } else if (groupCall != null) {
             GroupCallScreen(groupCall)
         } else if (active != null) {
             CallPage(active, onHangup = { CallController.hangup() })
@@ -193,7 +198,7 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
                         if (askCallPermissions(video)) CallController.start(peer, video)
                     }
                     2 -> ContactsPage(contacts, onOpen = { FamilyStore.selectedPeer = it; tab = 0 })
-                    else -> SettingsPage(networkStatus)
+                    else -> SettingsPage(networkStatus, onRecordings = { recordingsLibrary = true })
                 }
             }
             NavigationBar(containerColor = Color(0xFF0B1B2D)) {
@@ -418,7 +423,7 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
     var editGroup by remember(peer.id) { mutableStateOf(false) }
     if (editGroup && group != null) GroupEditor(group, onDismiss = { editGroup = false }, onSaved = { editGroup = false })
     var viewedMedia by remember(peer.id) { mutableStateOf<AttachmentTransport.Info?>(null) }
-    viewedMedia?.let { ChatMediaViewer(it) { viewedMedia = null } }
+    viewedMedia?.let { ChatMediaViewer(it, onDismiss = { viewedMedia = null }) }
     var locationJob by remember(peer.id) { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var locationDetails by remember(peer.id) { mutableStateOf("") }
     var voiceNote by remember(peer.id) { mutableStateOf(false) }
@@ -430,9 +435,9 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
             try {
                 if (group != null) GroupStore.sendMedia(group, listOf(uri))
                 else AttachmentTransport.send(context, peer, listOf(uri)) { FamilyStore.addChat(it) }
+                done(true)
             }
-            catch (_: Exception) { FamilyStore.lastError = "Voice note transfer failed; please try again" }
-            finally { done() }
+            catch (_: Exception) { done(false); FamilyStore.lastError = "Voice note transfer failed; please try again" }
         }
     })
     DisposableEffect(peer.id) { onDispose { locationJob?.cancel() } }
@@ -491,8 +496,9 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
             } finally { locationBusy = false }
             }
     }
-    val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
-        if (it) requestLocation() else FamilyStore.lastError = "Location permission was declined."
+    val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        if (it[Manifest.permission.ACCESS_COARSE_LOCATION] == true || it[Manifest.permission.ACCESS_FINE_LOCATION] == true)
+            requestLocation() else FamilyStore.lastError = "Location permission was declined."
     }
 
     if (locationPreview != null) {
@@ -572,7 +578,7 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
             IconButton(onClick = {
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
                     PackageManager.PERMISSION_GRANTED) requestLocation()
-                else locationPermission.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+                else locationPermission.launch(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION))
             }, enabled = !locationBusy) {
                 Icon(Icons.Outlined.LocationOn, "Share one-time location", tint = accent)
             }
@@ -592,7 +598,7 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
 }
 
 @Composable
-private fun SettingsPage(networkStatus: VpnConnectionStatus) {
+private fun SettingsPage(networkStatus: VpnConnectionStatus, onRecordings: () -> Unit) {
     val context = LocalContext.current
     var name by remember { mutableStateOf(FamilyStore.nickname) }
     val scope = rememberCoroutineScope()
@@ -649,6 +655,7 @@ private fun SettingsPage(networkStatus: VpnConnectionStatus) {
             color = muted, fontSize = 12.sp)
         HorizontalDivider(color = Color(0xFF24415C))
         VpnSettings()
+        OutlinedButton(onClick = onRecordings) { Text("Local call recordings") }
         HorizontalDivider(color = Color(0xFF24415C))
         Text("Family devices appear automatically after connecting. Messages stay on your devices.", color = muted, fontSize = 13.sp)
     }
@@ -658,7 +665,9 @@ private fun SettingsPage(networkStatus: VpnConnectionStatus) {
 private fun CallControls(onHangup: () -> Unit, modifier: Modifier = Modifier) {
     val speaker = CallController.speakerEnabled
     val muted = CallController.microphoneMuted
-    Row(modifier.fillMaxWidth().padding(horizontal = 12.dp),
+    Column(modifier) {
+    RecordingControls(FamilyStore.activeCall?.isVideo == true)
+    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         OutlinedButton(onClick = { CallController.selectSpeakerRoute(!speaker) }, modifier = Modifier.weight(1f),
             contentPadding = PaddingValues(horizontal = 4.dp)) {
@@ -673,6 +682,7 @@ private fun CallControls(onHangup: () -> Unit, modifier: Modifier = Modifier) {
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE95058), contentColor = Color.White)) {
             Text("End call", fontSize = 11.sp, maxLines = 1)
         }
+    }
     }
 }
 

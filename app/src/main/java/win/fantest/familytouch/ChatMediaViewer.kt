@@ -25,10 +25,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 @Composable
-internal fun ChatMediaViewer(info: AttachmentTransport.Info, onDismiss: () -> Unit) {
+internal fun ChatMediaViewer(info: AttachmentTransport.Info, onDismiss: () -> Unit,
+    sourceUri: android.net.Uri? = null, onShare: (() -> Unit)? = null) {
     val context = LocalContext.current
     var error by remember(info.id) { mutableStateOf<String?>(null) }
-    val uri = remember(info.id) { runCatching { AttachmentTransport.localUri(context, info) }
+    val uri = remember(info.id) { runCatching { sourceUri ?: AttachmentTransport.localUri(context, info) }
         .onFailure { error = "File is missing or incomplete" }.getOrNull() }
     var bitmap by remember(info.id) { mutableStateOf<ImageBitmap?>(null) }
     var scale by remember(info.id) { mutableFloatStateOf(1f) }
@@ -52,7 +53,7 @@ internal fun ChatMediaViewer(info: AttachmentTransport.Info, onDismiss: () -> Un
             Row(Modifier.fillMaxWidth().padding(8.dp)) {
                 TextButton(onClick = onDismiss) { Text("Back") }
                 Text(info.name, Modifier.weight(1f).padding(12.dp), maxLines = 2)
-                TextButton(onClick = { runCatching { AttachmentTransport.share(context, info) }
+                TextButton(onClick = { runCatching { if (onShare != null) onShare() else AttachmentTransport.share(context, info) }
                     .onFailure { error = "No compatible sharing app" } }) { Text("Share") }
             }
             if (error != null) Text(error!!, Modifier.padding(16.dp))

@@ -32,7 +32,8 @@ internal class VoiceNoteController(private val context: Context) {
     private var recorder: MediaRecorder? = null
     private var started = 0L
     fun start() {
-        check(FamilyStore.activeCall == null && FamilyStore.incomingCall == null) { "End the call before recording a voice note" }
+        check(FamilyStore.activeCall == null && FamilyStore.incomingCall == null && GroupCallController.session == null &&
+            GroupCallController.incoming == null) { "End the call before recording a voice note" }
         cancel()
         val folder = File(context.cacheDir, "voice-notes").apply { mkdirs() }
         file = File(folder, "voice-${UUID.randomUUID()}.m4a")
@@ -75,7 +76,7 @@ internal class VoiceNoteController(private val context: Context) {
 }
 
 @Composable
-internal fun VoiceNoteDialog(onDismiss: () -> Unit, onSend: (Uri, () -> Unit) -> Unit) {
+internal fun VoiceNoteDialog(onDismiss: () -> Unit, onSend: (Uri, (Boolean) -> Unit) -> Unit) {
     val context = LocalContext.current
     val controller = remember { VoiceNoteController(context.applicationContext) }
     var failure by remember { mutableStateOf("") }
@@ -94,8 +95,8 @@ internal fun VoiceNoteDialog(onDismiss: () -> Unit, onSend: (Uri, () -> Unit) ->
         try { controller.start() } catch (e: Exception) { failure = e.message ?: "Microphone unavailable" }
     }
     LaunchedEffect(controller.recording) { while (controller.recording) { controller.tick(); delay(200) } }
-    LaunchedEffect(FamilyStore.incomingCall, FamilyStore.activeCall) {
-        if (FamilyStore.incomingCall != null || FamilyStore.activeCall != null) cancel()
+    LaunchedEffect(FamilyStore.incomingCall, FamilyStore.activeCall, GroupCallController.incoming, GroupCallController.session) {
+        if (FamilyStore.incomingCall != null || FamilyStore.activeCall != null || GroupCallController.incoming != null || GroupCallController.session != null) cancel()
     }
     AlertDialog(onDismissRequest = { if (!sending) cancel() }, title = { Text("Voice note") }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -113,7 +114,10 @@ internal fun VoiceNoteDialog(onDismiss: () -> Unit, onSend: (Uri, () -> Unit) ->
             try {
                 player?.release(); player = null
                 val uri = controller.uri(); sending = true
-                onSend(uri) { cancel() }
+                onSend(uri) { success ->
+                    sending = false
+                    if (success) cancel() else failure = "Transfer failed. Your voice note is ready to retry."
+                }
             } catch (e: Exception) { sending = false; failure = e.message ?: "Cannot send voice note" }
         }) { Text(if (sending) "Sending…" else "Send") }
     }, dismissButton = { TextButton(enabled = !sending, onClick = { cancel() }) { Text("Cancel") } })

@@ -27,6 +27,8 @@ internal object GroupStore {
     private lateinit var context: Context
     val groups = mutableStateListOf<FamilyGroup>()
     private val pending = mutableListOf<JSONObject>()
+    private val updates = mutableListOf<JSONObject>()
+    private val tombstones = mutableMapOf<String, FamilyGroup>()
     private val deliveryLabels = mutableStateMapOf<String, String>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val flushMutex = Mutex()
@@ -38,12 +40,21 @@ internal object GroupStore {
             val array = JSONArray(prefs.getString("groups", "[]"))
             for (i in 0 until array.length()) groups.add(decode(array.getJSONObject(i)))
             val queue = JSONArray(prefs.getString("pending", "[]"))
+            val changes = JSONArray(prefs.getString("updates", "[]"))
+            for (i in 0 until changes.length()) updates.add(changes.getJSONObject(i))
+            val removed = JSONArray(prefs.getString("tombstones", "[]"))
+            for (i in 0 until removed.length()) decode(removed.getJSONObject(i)).let { tombstones[it.id] = it }
             for (i in 0 until minOf(queue.length(), 500)) pending.add(queue.getJSONObject(i))
             pending.forEach { deliveryLabels[it.getString("messageId")] = "Pending ${it.getJSONArray("remaining").length()} recipient(s) · retries automatically" }
         }.onFailure { FamilyStore.lastError = "Some group data could not be loaded" }
         scope.launch { while (isActive) { runCatching { flush() }; delay(15000) } }
     }
-    @Synchronized fun find(id: String?) = groups.firstOrNull { it.id == id }
+    @Synchronized fun find(id: String?) = groups.firstOrNull { it.id == id } ?: tombstones[id]
+    @Synchronized fun snapshot(sender: String, data: JSONObject): JSONObject {
+        val group = requireNotNull(find(data.getString("groupId")))
+        require(group.owner == FamilyStore.deviceId && (sender in group.members || sender in FamilyStore.contacts.map { it.id }))
+        return group.json()
+    }
     private fun decode(data: JSONObject): FamilyGroup {
         val id = data.getString("groupId")
         require(id.startsWith("group:")); UUID.fromString(id.removePrefix("group:"))
@@ -61,13 +72,16 @@ internal object GroupStore {
         context.getSharedPreferences("groups_v1", Context.MODE_PRIVATE).edit()
             .putString("groups", JSONArray(groups.map { it.json() }).toString())
             .putString("pending", JSONArray(pending).toString()).apply()
+        context.getSharedPreferences("groups_v1", Context.MODE_PRIVATE).edit()
+            .putString("updates", JSONArray(updates).toString())
+            .putString("tombstones", JSONArray(tombstones.values.map { it.json() }).toString()).apply()
     }
     @Synchronized fun create(title: String, selected: Set<String>): FamilyGroup {
         require(groups.size < 64 && title.trim().length in 1..60 && selected.size in 1..31)
         require(selected.all { FamilyStore.find(it) != null }) { "Select registered family devices" }
         val group = FamilyGroup("group:" + UUID.randomUUID(), title.trim(), FamilyStore.deviceId,
             selected + FamilyStore.deviceId, 1)
-        groups.add(group); save(); scope.launch { publish(group) }; return group
+        groups.add(group); scheduleUpdate(group, group.members); save(); scope.launch { flush() }; return group
     }
     @Synchronized fun receiveUpdate(sender: String, data: JSONObject) {
         val next = decode(data)
@@ -76,8 +90,10 @@ internal object GroupStore {
         if (old == next) return
         if (old == null) require(FamilyStore.deviceId in next.members && groups.size < 64)
         else require(old.membership.canUpdate(sender, next.owner, next.members, next.revision)) { "Invalid group revision" }
+        if (old != null && GroupCallController.session?.groupId == next.id) GroupCallController.hangup()
         groups.removeAll { it.id == next.id }
-        if (FamilyStore.deviceId in next.members) groups.add(next)
+        if (FamilyStore.deviceId in next.members) { groups.add(next); tombstones.remove(next.id) }
+        else tombstones[next.id] = next
         save()
     }
     @Synchronized fun validateSender(sender: String, data: JSONObject): FamilyGroup {
@@ -91,24 +107,31 @@ internal object GroupStore {
         require(group.owner == FamilyStore.deviceId && group.membership.canUpdate(group.owner, group.owner, members, group.revision + 1))
         require(members.all { it == FamilyStore.deviceId || FamilyStore.find(it) != null })
         val next = group.copy(members = members, revision = group.revision + 1)
-        groups[groups.indexOfFirst { it.id == group.id }] = next; save()
-        scope.launch { publish(next, group.members + members) }
+        if (GroupCallController.session?.groupId == group.id) GroupCallController.hangup()
+        groups[groups.indexOfFirst { it.id == group.id }] = next
+        scheduleUpdate(next, group.members + members); save()
+        scope.launch { flush() }
     }
     suspend fun leave(group: FamilyGroup) {
         require(group.owner != FamilyStore.deviceId) { "The creator manages membership; remove other members instead" }
         val owner = requireNotNull(FamilyStore.find(group.owner))
         Tailnet.send(owner, "group_leave", JSONObject().put("groupId", group.id))
-        withContext(Dispatchers.Main) { groups.removeAll { it.id == group.id }; save() }
+        val latest = Tailnet.send(owner, "group_snapshot", JSONObject().put("groupId", group.id))
+        withContext(Dispatchers.Main) { receiveUpdate(owner.id, latest) }
     }
     fun receiveLeave(sender: String, data: JSONObject) {
         val group = requireNotNull(find(data.getString("groupId")))
         require(group.owner == FamilyStore.deviceId && sender in group.members && sender != group.owner)
         changeMembers(group, group.members - sender)
     }
-    private suspend fun publish(group: FamilyGroup, targets: Set<String> = group.members) {
-        targets.filter { it != FamilyStore.deviceId }.forEach { id ->
-            FamilyStore.find(id)?.let { runCatching { Tailnet.send(it, "group_update", group.json()) } }
+    @Synchronized private fun scheduleUpdate(group: FamilyGroup, targets: Set<String>) {
+        val all = targets.toMutableSet()
+        updates.filter { it.getString("groupId") == group.id }.forEach { item ->
+            val ids = item.getJSONArray("remaining")
+            for (i in 0 until ids.length()) all.add(ids.getString(i))
         }
+        updates.removeAll { it.getString("groupId") == group.id }
+        updates.add(group.json().put("remaining", JSONArray((all - FamilyStore.deviceId).toList())))
     }
     @Synchronized fun queue(group: FamilyGroup, text: String, attachment: AttachmentTransport.Info? = null) {
         require(FamilyStore.deviceId in group.members && pending.size < 500)
@@ -130,9 +153,37 @@ internal object GroupStore {
     }
     suspend fun flush() = flushMutex.withLock {
         if (!EmbeddedTailnet.status.connected) return@withLock
+        for (update in synchronized(this) { updates.toList() }) {
+            val array = update.getJSONArray("remaining")
+            val remaining = (0 until array.length()).map { array.getString(it) }.toMutableSet()
+            for (id in remaining.toList()) {
+                val peer = FamilyStore.find(id) ?: continue
+                try {
+                    require(Tailnet.send(peer, "presence").optInt("protocol", 1) >= 4) { "Group recipient needs an update" }
+                    Tailnet.send(peer, "group_update", update); remaining.remove(id)
+                }
+                catch (e: CancellationException) { throw e }
+                catch (_: Exception) { }
+            }
+            synchronized(this) {
+                update.put("remaining", JSONArray(remaining.toList()))
+                if (remaining.isEmpty()) updates.remove(update)
+                save()
+            }
+        }
         val snapshot = synchronized(this) { pending.toList() }
         for (item in snapshot) {
-            val group = find(item.getString("groupId")) ?: continue
+            var group = find(item.getString("groupId")) ?: continue
+            if (group.owner != FamilyStore.deviceId) {
+                try {
+                    val owner = requireNotNull(FamilyStore.find(group.owner))
+                    val latest = Tailnet.send(owner, "group_snapshot", JSONObject().put("groupId", group.id))
+                    withContext(Dispatchers.Main) { receiveUpdate(owner.id, latest) }
+                    group = requireNotNull(find(group.id))
+                } catch (e: CancellationException) { throw e }
+                catch (_: Exception) { continue }
+            }
+            if (FamilyStore.deviceId !in group.members) continue
             val remaining = synchronized(this) {
                 val array = item.getJSONArray("remaining")
                 (0 until array.length()).map { array.getString(it) }.filter { it in group.members }.toMutableSet()
@@ -141,7 +192,7 @@ internal object GroupStore {
                 val peer = FamilyStore.find(id) ?: continue
                 try {
                     val capabilities = Tailnet.send(peer, "presence")
-                    require(capabilities.optInt("protocol", 1) >= 2) { "Group recipient needs a Family Touch update" }
+                    require(capabilities.optInt("protocol", 1) >= 4) { "Group recipient needs a Family Touch update" }
                     if (group.owner == FamilyStore.deviceId) Tailnet.send(peer, "group_update", group.json())
                     val attachment = AttachmentTransport.parse(item.getString("text"))
                     if (attachment != null) AttachmentTransport.sendPrepared(context, peer, attachment, group)

@@ -6,13 +6,14 @@ plugins {
 
 android {
     namespace = "win.fantest.familytouch"
+    testBuildType = "qa"
     compileSdk = 36
     defaultConfig {
         applicationId = "win.fantest.familytouch"
         minSdk = 29
         targetSdk = 36
-        versionCode = 13
-        versionName = "0.1.0-embedded08"
+        versionCode = 14
+        versionName = "0.2.0-family-groups01"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["familyTouchAppLabel"] = "Family Touch"
     }
@@ -71,4 +72,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("io.github.webrtc-sdk:android:150.7871.01")
     testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }

@@ -26,10 +26,13 @@ internal object GroupCallController {
     val channels = mutableMapOf<String, DataChannel>()
     var channelListener: ((String, DataChannel) -> Unit)? = null
     var micMuted by mutableStateOf(false); private set
+    var cameraEnabled by mutableStateOf(true); private set
     private val connections = mutableMapOf<String, PeerConnection>()
     private val accepted = mutableSetOf<String>()
+    private val joinSeen = mutableSetOf<String>()
     private val pendingIce = mutableMapOf<String, MutableList<IceCandidate>>()
     private val remoteSet = mutableSetOf<String>()
+    private val offered = mutableSetOf<String>()
     private var source: AudioSource? = null
     private var audio: AudioTrack? = null
     private var camera: CameraVideoCapturer? = null
@@ -38,6 +41,7 @@ internal object GroupCallController {
     private var capture: VideoTrack? = null
     private var waitingJob: Job? = null
     private var connectedOnce = false
+    fun currentParticipants(): Set<String> = accepted.toSet()
     fun init(ctx: Context) { context = ctx.applicationContext }
     private fun body(call: GroupCallInvite): JSONObject = JSONObject().put("sessionId", call.sessionId)
         .put("groupId", call.groupId).put("revision", call.revision)
@@ -63,7 +67,7 @@ internal object GroupCallController {
             scope.launch {
                 try {
                     val peer = requireNotNull(FamilyStore.find(id))
-                    require(Tailnet.send(peer, "presence").optInt("protocol", 1) >= 3) { "Update required" }
+                    require(Tailnet.send(peer, "presence").optInt("protocol", 1) >= 4) { "Update required" }
                     send(id, "group_call_invite")
                 } catch (_: Exception) { states[id] = "Unavailable / update required" }
             }
@@ -78,7 +82,7 @@ internal object GroupCallController {
         try {
             capture(call.video)
             call.participants.filter { it != FamilyStore.deviceId }.forEach { id -> send(id, "group_call_join") }
-            accepted.filter { it != FamilyStore.deviceId }.forEach { connect(it) }
+            // Negotiate only after reciprocal join acknowledgement.
             timeout(call.sessionId)
         } catch (e: Exception) { FamilyStore.lastError = e.message ?: "Cannot start group call"; hangup() }
     }
@@ -97,6 +101,7 @@ internal object GroupCallController {
         source = factory.createAudioSource(MediaConstraints())
         audio = factory.createAudioTrack("GroupAudio", source)
         micMuted = false
+        cameraEnabled = true
         if (video) {
             val enumerator = Camera2Enumerator(context)
             val name = enumerator.deviceNames.firstOrNull { enumerator.isFrontFacing(it) } ?: enumerator.deviceNames.firstOrNull()
@@ -130,6 +135,8 @@ internal object GroupCallController {
                             PeerConnection.IceConnectionState.FAILED -> "Connection failed"
                             else -> "Connecting"
                         }
+                        if (state == PeerConnection.IceConnectionState.DISCONNECTED || state == PeerConnection.IceConnectionState.FAILED)
+                            RecordingCoordinator.stop("Call connection interrupted")
                     }
                 }
                 override fun onIceConnectionReceivingChange(receiving: Boolean) {}
@@ -156,7 +163,7 @@ internal object GroupCallController {
         if (answerOffer != null) setRemote(peer, SessionDescription(SessionDescription.Type.OFFER, answerOffer)) {
             pc.createAnswer(observer { sdp -> pc.setLocalDescription(observer(), sdp)
                 send(peer, "group_call_answer", JSONObject().put("sdp", sdp.description)) }, constraints(call.video))
-        } else if (FamilyStore.deviceId < peer && pc.localDescription == null) {
+        } else if (FamilyStore.deviceId < peer && offered.add(peer)) {
             pc.createOffer(observer { sdp -> pc.setLocalDescription(observer(), sdp)
                 send(peer, "group_call_offer", JSONObject().put("sdp", sdp.description)) }, constraints(call.video))
         }
@@ -195,7 +202,20 @@ internal object GroupCallController {
         val call = session ?: incoming ?: return
         require(call.groupId == group.id && CallSessionPolicy.acceptsSignal(call.sessionId, id, call.participants, sender))
         when(type) {
-            "group_call_join" -> { accepted.add(sender); if (session != null) connect(sender) }
+            "group_call_join" -> {
+                if (sender !in accepted) RecordingCoordinator.stop("Call participant changed; new consent required")
+                accepted.add(sender)
+                if (session != null) {
+                    send(sender, "group_call_join_ack")
+                    if (joinSeen.add(sender)) send(sender, "group_call_join")
+                }
+            }
+            "group_call_join_ack" -> {
+                if (session != null) {
+                    if (sender !in accepted) RecordingCoordinator.stop("Call participant changed; new consent required")
+                    accepted.add(sender); connect(sender)
+                }
+            }
             "group_call_offer" -> { require(sender in accepted && session != null); connect(sender, data.getString("sdp")) }
             "group_call_answer" -> { require(sender in accepted); setRemote(sender, SessionDescription(SessionDescription.Type.ANSWER, data.getString("sdp"))) }
             "group_call_ice" -> {
@@ -205,6 +225,7 @@ internal object GroupCallController {
                 else pendingIce.getOrPut(sender) { mutableListOf() }.also { require(it.size < 128); it.add(ice) }
             }
             "group_call_leave" -> {
+                RecordingCoordinator.stop("Call participant left")
                 accepted.remove(sender); states[sender] = "Left / declined"
                 videos.remove(sender); channels.remove(sender)?.close()
                 connections.remove(sender)?.apply { close(); dispose() }
@@ -214,12 +235,14 @@ internal object GroupCallController {
         }
     }
     fun mute() { micMuted = !micMuted; audio?.setEnabled(!micMuted) }
+    fun toggleCamera() { cameraEnabled = !cameraEnabled; capture?.setEnabled(cameraEnabled) }
     fun hangup() {
         val call = session ?: incoming
         call?.participants?.filter { it != FamilyStore.deviceId }?.forEach { send(it, "group_call_leave") }
         close()
     }
     private fun close() {
+        RecordingCoordinator.stop("Call ended")
         RingtonePlayer.stop()
         waitingJob?.cancel(); waitingJob = null
         runCatching { camera?.stopCapture() }; camera?.dispose(); camera = null
@@ -228,7 +251,7 @@ internal object GroupCallController {
         connections.values.forEach { it.close(); it.dispose() }; connections.clear()
         videos.clear(); capture?.dispose(); capture = null; videoSource?.dispose(); videoSource = null
         audio?.dispose(); audio = null; source?.dispose(); source = null
-        accepted.clear(); states.clear(); pendingIce.clear(); remoteSet.clear(); connectedOnce = false
-        session = null; incoming = null; CallController.endGroupAudio()
+        accepted.clear(); joinSeen.clear(); offered.clear(); states.clear(); pendingIce.clear(); remoteSet.clear(); connectedOnce = false
+        session = null; incoming = null; micMuted = false; cameraEnabled = true; CallController.endGroupAudio()
     }
 }

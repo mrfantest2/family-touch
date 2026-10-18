@@ -193,7 +193,13 @@ class PeerService : Service() {
                             JSONObject()
                         }
                         "group_update" -> { GroupStore.receiveUpdate(id, json); JSONObject() }
+                        "group_snapshot" -> GroupStore.snapshot(id, json)
                         "group_leave" -> { GroupStore.receiveLeave(id, json); JSONObject() }
+                        "record_check" -> kotlinx.coroutines.withContext(Dispatchers.Main) { RecordingCoordinator.proof(id, json) }
+                        "record_request", "record_vote", "record_start", "record_stop" -> {
+                            kotlinx.coroutines.withContext(Dispatchers.Main) { RecordingCoordinator.receive(type, id, json) }
+                            JSONObject()
+                        }
                         "group_message" -> {
                             val group = GroupStore.validateSender(id, json)
                             val messageId = json.getString("messageId")
@@ -206,7 +212,7 @@ class PeerService : Service() {
                             }
                             JSONObject()
                         }
-                        "presence" -> JSONObject().put("protocol", 3).put("status", when {
+                        "presence" -> JSONObject().put("protocol", 4).put("status", when {
                             FamilyStore.activeCall != null || GroupCallController.session != null -> "on_call"
                             FamilyStore.appVisible -> "available"
                             else -> "away"
@@ -222,7 +228,7 @@ class PeerService : Service() {
                             }
                             JSONObject()
                         }
-                        "group_call_invite", "group_call_join", "group_call_offer", "group_call_answer", "group_call_ice", "group_call_leave" -> {
+                        "group_call_invite", "group_call_join", "group_call_join_ack", "group_call_offer", "group_call_answer", "group_call_ice", "group_call_leave" -> {
                             kotlinx.coroutines.withContext(Dispatchers.Main) {
                                 GroupCallController.receive(type, id, json) { who -> showNotification("Incoming Family Touch group call", who, true) }
                             }
