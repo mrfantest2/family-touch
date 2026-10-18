@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
 import android.graphics.Bitmap
 import android.util.Base64
 import androidx.compose.foundation.Image
@@ -55,6 +56,7 @@ import kotlinx.coroutines.delay
 import java.text.DateFormat
 import java.util.Date
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -340,10 +342,10 @@ private fun Avatar(name: String, photo: String? = null) {
             }
         } catch (_: Exception) { null }
     }
-    Box(Modifier.size(48.dp).background(Color(0xFF164674), CircleShape),
+    Box(Modifier.size(48.dp).clip(CircleShape).background(Color(0xFF164674)),
         contentAlignment = Alignment.Center) {
         if (decoded != null) Image(decoded, "Profile image", Modifier.fillMaxSize(),
-            contentScale = ContentScale.Crop)
+            contentScale = ContentScale.Fit)
         else Text(name.take(1).uppercase(), fontWeight = FontWeight.Bold,
             fontSize = 21.sp, color = Color.White)
     }
@@ -525,12 +527,16 @@ private fun SettingsPage(networkStatus: VpnConnectionStatus) {
     val scope = rememberCoroutineScope()
     val pickAvatar = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) try {
-            val source = context.contentResolver.openInputStream(uri)?.use { input ->
-                BitmapFactory.decodeStream(input, null, BitmapFactory.Options().apply { inSampleSize = 4 })
+            val source = ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, uri)) { decoder, info, _ ->
+                // ImageDecoder applies EXIF orientation; bound memory without stretching either axis.
+                val scale = minOf(1.0, 128.0 / maxOf(info.size.width, info.size.height))
+                decoder.setTargetSize(maxOf(1, (info.size.width * scale).toInt()),
+                    maxOf(1, (info.size.height * scale).toInt()))
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
             }
             if (source == null) FamilyStore.lastError = "Unable to open picture"
             else {
-                val thumbnail = Bitmap.createScaledBitmap(source, 128, 128, true)
+                val thumbnail = source
                 val out = ByteArrayOutputStream()
                 var quality = 85
                 do {
