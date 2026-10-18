@@ -104,7 +104,8 @@ internal object EmbeddedTailnet {
             override fun close() {}
         } }
         val response = engine(context).callLocalAPI(15000, method, "/localapi/v0/$endpoint", stream)
-        val result = response.bodyBytes()
+        // Successful mutation endpoints (including start) return HTTP 204 with no body.
+        val result = response.bodyBytes() ?: byteArrayOf()
         check(response.statusCode() in 200..299) { "Tailnet request failed (${response.statusCode()}); check provisioning and network" }
         return if (result.isEmpty()) JSONObject() else JSONObject(String(result))
     }

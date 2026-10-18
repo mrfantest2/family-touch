@@ -11,8 +11,8 @@ android {
         applicationId = "win.fantest.familytouch"
         minSdk = 29
         targetSdk = 36
-        versionCode = 11
-        versionName = "0.1.0-embedded06"
+        versionCode = 12
+        versionName = "0.1.0-embedded07"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["familyTouchAppLabel"] = "Family Touch"
     }
