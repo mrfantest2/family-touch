@@ -140,6 +140,9 @@ object CallController {
     }
 
     val eglContext get() = egl.eglBaseContext
+    internal val peerFactory get() = factory
+    internal fun beginGroupAudio(video: Boolean) = routeAudioToCall(video)
+    internal fun endGroupAudio() = restoreAudio()
 
     @Synchronized
     fun init(ctx: Context) {
@@ -237,6 +240,7 @@ object CallController {
 
     fun start(peer: Peer, video: Boolean) {
         try {
+            check(GroupCallController.session == null && GroupCallController.incoming == null) { "Already in a group call" }
             prepare(peer, video)
             beginLog(video, true)
             FamilyStore.activeCall = CallInvite(peer.id, video, outgoing = true)
@@ -315,7 +319,8 @@ object CallController {
     fun receive(type: String, peerId: String, data: JSONObject, alert: (String) -> Unit) {
         when (type) {
             "offer" -> {
-                if (FamilyStore.activeCall != null || FamilyStore.incomingCall != null) return
+                if (FamilyStore.activeCall != null || FamilyStore.incomingCall != null ||
+                    GroupCallController.session != null || GroupCallController.incoming != null) return
                 val peer = FamilyStore.find(peerId) ?: return
                 FamilyStore.incomingCall = CallInvite(peerId, data.optBoolean("video"), data.getString("sdp"))
                 alert(peer.name + " is calling")

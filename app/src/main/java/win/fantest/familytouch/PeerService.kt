@@ -34,6 +34,7 @@ class PeerService : Service() {
     override fun onCreate() {
         super.onCreate()
         FamilyStore.init(this)
+        GroupStore.init(this)
         Tailnet.init(this)
         scope.launch {
             while (isActive) {
@@ -176,11 +177,13 @@ class PeerService : Service() {
                     val reply: Any = when (type) {
                         "attachment" -> {
                             s.soTimeout = 90_000
-                            val item = AttachmentTransport.receive(this@PeerService, input, json, id)
+                            val group = if (json.has("groupId")) GroupStore.validateSender(id, json) else null
+                            val received = AttachmentTransport.receive(this@PeerService, input, json, id)
+                            val item = received.copy(peerId = group?.id ?: id, senderId = id)
                             if (FamilyStore.messages.none { it.id == item.id }) {
                                 FamilyStore.addChat(item)
                                 showNotification(json.optString("nick", "Family Touch"),
-                                    if (item.text.contains("|image/")) "Sent a photo" else "Sent a video", peerId = id)
+                                    if (item.text.contains("|image/")) "Sent a photo" else "Sent media", peerId = item.peerId)
                             }
                             JSONObject()
                         }
@@ -189,8 +192,22 @@ class PeerService : Service() {
                             FamilyStore.setPeerPhoto(id, json.optString("avatar"))
                             JSONObject()
                         }
-                        "presence" -> JSONObject().put("status", when {
-                            FamilyStore.activeCall != null -> "on_call"
+                        "group_update" -> { GroupStore.receiveUpdate(id, json); JSONObject() }
+                        "group_leave" -> { GroupStore.receiveLeave(id, json); JSONObject() }
+                        "group_message" -> {
+                            val group = GroupStore.validateSender(id, json)
+                            val messageId = json.getString("messageId")
+                            UUID.fromString(messageId)
+                            val text = json.getString("text")
+                            require(text.isNotBlank() && text.length <= 6000)
+                            if (FamilyStore.messages.none { it.id == messageId }) {
+                                FamilyStore.addChat(ChatItem(messageId, group.id, false, text, System.currentTimeMillis(), true, id))
+                                showNotification(group.title, peer.name + ": " + text.take(80), peerId = group.id)
+                            }
+                            JSONObject()
+                        }
+                        "presence" -> JSONObject().put("protocol", 3).put("status", when {
+                            FamilyStore.activeCall != null || GroupCallController.session != null -> "on_call"
                             FamilyStore.appVisible -> "available"
                             else -> "away"
                         })
@@ -202,6 +219,12 @@ class PeerService : Service() {
                             if (!exists) {
                                 FamilyStore.addChat(ChatItem(messageId, id, false, txt, System.currentTimeMillis(), true))
                                 showNotification(json.optString("nick", "Family Touch"), txt.take(100), peerId = id)
+                            }
+                            JSONObject()
+                        }
+                        "group_call_invite", "group_call_join", "group_call_offer", "group_call_answer", "group_call_ice", "group_call_leave" -> {
+                            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                GroupCallController.receive(type, id, json) { who -> showNotification("Incoming Family Touch group call", who, true) }
                             }
                             JSONObject()
                         }

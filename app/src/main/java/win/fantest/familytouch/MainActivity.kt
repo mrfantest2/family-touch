@@ -95,11 +95,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         FamilyStore.init(this)
+        GroupStore.init(this)
         Tailnet.init(this)
         if (getSharedPreferences("vpn", Context.MODE_PRIVATE).getBoolean("enabled", false) && android.net.VpnService.prepare(this) == null) {
             ContextCompat.startForegroundService(this, Intent(this, FamilyVpnService::class.java))
         }
         CallController.init(this)
+        GroupCallController.init(this)
         try { ContextCompat.startForegroundService(this, Intent(this, PeerService::class.java)) }
         catch (ex: Exception) { FamilyStore.lastError = "Service: " + ex.message }
         if (!FamilyStore.needsNicknamePrompt) requestNotificationPermission()
@@ -126,13 +128,17 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
     val scope = rememberCoroutineScope()
     var networkStatus by remember { mutableStateOf(EmbeddedTailnet.status) }
     val contacts = FamilyStore.contacts.toList()
-    val selectedPeer = FamilyStore.selectedPeer?.let { FamilyStore.find(it) }
+    val selectedPeer = FamilyStore.selectedPeer?.let { id -> FamilyStore.find(id) ?: GroupStore.find(id)?.let {
+        Peer(it.id, it.title, "", "")
+    } }
     val incoming = FamilyStore.incomingCall
     val active = FamilyStore.activeCall
+    val groupCall = GroupCallController.session
+    val groupIncoming = GroupCallController.incoming
     var confirmBack by remember { mutableStateOf(false) }
     BackHandler {
         when {
-            active != null -> confirmBack = true
+            active != null || groupCall != null -> confirmBack = true
             FamilyStore.selectedPeer != null -> FamilyStore.selectedPeer = null
             tab != 0 -> tab = 0
             else -> confirmBack = true
@@ -168,11 +174,16 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
 
         }
         HorizontalDivider(color = Color(0xFF20364B))
-        if (active != null) {
+        if (groupCall != null) {
+            GroupCallScreen(groupCall)
+        } else if (active != null) {
             CallPage(active, onHangup = { CallController.hangup() })
         } else if (selectedPeer != null && tab == 0) {
             Conversation(peer = selectedPeer, onCall = { video ->
-                if (askCallPermissions(video)) CallController.start(selectedPeer, video)
+                if (askCallPermissions(video)) try {
+                    val group = GroupStore.find(selectedPeer.id)
+                    if (group != null) GroupCallController.start(group, video) else CallController.start(selectedPeer, video)
+                } catch (e: Exception) { FamilyStore.lastError = e.message ?: "Cannot start call" }
             })
         } else {
             Box(Modifier.weight(1f)) {
@@ -198,7 +209,14 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
         }
     }
 
-    if (!FamilyStore.needsNicknamePrompt && !networkStatus.connected && incoming == null && active == null) {
+    if (groupIncoming != null) AlertDialog(onDismissRequest = {}, title = { Text("Incoming group call") },
+        text = { Text(GroupStore.find(groupIncoming.groupId)?.title ?: "Family group") },
+        confirmButton = { Button(onClick = {
+            if (askCallPermissions(groupIncoming.video)) GroupCallController.accept()
+        }) { Text("Join") } }, dismissButton = {
+            TextButton(onClick = { GroupCallController.hangup() }) { Text("Decline") }
+        })
+    if (!FamilyStore.needsNicknamePrompt && !networkStatus.connected && incoming == null && active == null && groupCall == null) {
         AlertDialog(onDismissRequest = {}, title = { Text("Turn on your private connection") },
             text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("Family Touch needs VPN permission for private calls and messages. Your family devices will appear automatically.")
@@ -252,8 +270,14 @@ private fun SurfaceLogo() {
 
 @Composable
 private fun ChatsPage(peers: List<Peer>, onOpen: (String) -> Unit) {
-    if (peers.isEmpty()) EmptyState("Welcome to Family Touch", "Your family devices appear automatically after connecting.")
+    var newGroup by remember { mutableStateOf(false) }
+    if (newGroup) GroupEditor(onDismiss = { newGroup = false }, onSaved = { newGroup = false; onOpen(it.id) })
+    if (peers.isEmpty() && GroupStore.groups.isEmpty()) EmptyState("Welcome to Family Touch", "Your family devices appear automatically after connecting.")
     else LazyColumn(contentPadding = PaddingValues(vertical = 8.dp)) {
+        item { TextButton(onClick = { newGroup = true }, modifier = Modifier.padding(horizontal = 12.dp)) { Text("Create group") } }
+        items(GroupStore.groups.toList(), key = { it.id }) { group ->
+            PeerRow(Peer(group.id, group.title, "", ""), "Group · ${group.members.size} devices", onClick = { onOpen(group.id) })
+        }
         items(peers, key = { it.id }) { peer ->
             val message = FamilyStore.messages.lastOrNull { it.peerId == peer.id }
             PeerRow(peer, message?.text ?: "Start a conversation", onClick = { onOpen(peer.id) })
@@ -384,12 +408,15 @@ private fun EmptyState(title: String, subtitle: String) {
 
 @Composable
 private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
+    val group = GroupStore.find(peer.id)
     val scope = rememberCoroutineScope()
     var draft by remember(peer.id) { mutableStateOf("") }
     val context = LocalContext.current
     var locationPreview by remember { mutableStateOf<String?>(null) }
     var locationBusy by remember { mutableStateOf(false) }
     var sendingMedia by remember { mutableStateOf(false) }
+    var editGroup by remember(peer.id) { mutableStateOf(false) }
+    if (editGroup && group != null) GroupEditor(group, onDismiss = { editGroup = false }, onSaved = { editGroup = false })
     var viewedMedia by remember(peer.id) { mutableStateOf<AttachmentTransport.Info?>(null) }
     viewedMedia?.let { ChatMediaViewer(it) { viewedMedia = null } }
     var locationJob by remember(peer.id) { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -400,7 +427,10 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
     }
     if (voiceNote) VoiceNoteDialog(onDismiss = { voiceNote = false }, onSend = { uri, done ->
         scope.launch {
-            try { AttachmentTransport.send(context, peer, listOf(uri)) { FamilyStore.addChat(it) } }
+            try {
+                if (group != null) GroupStore.sendMedia(group, listOf(uri))
+                else AttachmentTransport.send(context, peer, listOf(uri)) { FamilyStore.addChat(it) }
+            }
             catch (_: Exception) { FamilyStore.lastError = "Voice note transfer failed; please try again" }
             finally { done() }
         }
@@ -414,7 +444,8 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
             sendingMedia = true
             scope.launch {
                 try {
-                    AttachmentTransport.send(context, peer, uris) { item ->
+                    if (group != null) GroupStore.sendMedia(group, uris)
+                    else AttachmentTransport.send(context, peer, uris) { item ->
                         FamilyStore.addChat(item)
                     }
                 } catch (e: Exception) {
@@ -426,7 +457,10 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
 
     val sendChat: (String) -> Unit = { message ->
         val text = message.trim()
-        if (text.isNotEmpty()) {
+        if (text.isNotEmpty() && group != null) {
+            try { GroupStore.queue(group, text) }
+            catch (e: Exception) { FamilyStore.lastError = e.message ?: "Group message could not be queued" }
+        } else if (text.isNotEmpty()) {
             val id = UUID.randomUUID().toString()
             FamilyStore.addChat(ChatItem(id, peer.id, true, text, System.currentTimeMillis(), false))
             scope.launch {
@@ -477,6 +511,13 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
     }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(10.dp), horizontalArrangement = Arrangement.End) {
+            if (group != null) TextButton(onClick = {
+                if (group.owner == FamilyStore.deviceId) editGroup = true
+                else scope.launch {
+                    try { GroupStore.leave(group); FamilyStore.selectedPeer = null }
+                    catch (_: Exception) { FamilyStore.lastError = "Creator unavailable; try leaving again later" }
+                }
+            }) { Text(if (group.owner == FamilyStore.deviceId) "Members" else "Leave group") }
             IconButton(onClick = { onCall(false) }) { Icon(Icons.Outlined.Call, "Voice call", tint = Color(0xFF54DDA6)) }
             IconButton(onClick = { onCall(true) }) { Icon(Icons.Outlined.Videocam, "Video call", tint = accent) }
         }
@@ -488,6 +529,7 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
                     Column(Modifier.widthIn(max = 300.dp).background(if (msg.outgoing) Color(0xFF1268AE) else surface,
                         RoundedCornerShape(16.dp)).padding(horizontal = 15.dp, vertical = 11.dp)) {
                         val attachment = AttachmentTransport.parse(msg.text)
+                        if (group != null && !msg.outgoing) Text(FamilyStore.find(msg.senderId)?.name ?: "Family member", fontSize = 11.sp)
                         if (attachment != null) {
                             Text((if (attachment.mime.startsWith("image/")) "Photo" else if (attachment.mime.startsWith("audio/")) "Voice / audio" else "Video") +
                                 " · " + attachment.name, color = Color.White, maxLines = 2)
@@ -511,7 +553,7 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
                         } else Text(msg.text, color = Color.White)
                         Text(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(msg.time)),
                             color = Color(0xFFBFDBEF), fontSize = 10.sp)
-                        if (msg.outgoing) Text(if (msg.delivered) "Delivered" else "Not delivered",
+                        if (msg.outgoing) Text(if (msg.delivered) "Delivered" else GroupStore.delivery(msg.id) ?: "Not delivered",
                             color = Color(0xFFBFDBEF), fontSize = 10.sp)
                     }
                 }

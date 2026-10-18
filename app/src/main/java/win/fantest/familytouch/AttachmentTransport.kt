@@ -59,6 +59,52 @@ object AttachmentTransport {
     private fun digest() = MessageDigest.getInstance("SHA-256")
     private fun toHex(bytes: ByteArray) = bytes.joinToString("") { "%02x".format(it) }
 
+    internal fun prepare(context: Context, uri: Uri): Info {
+        val mime = context.contentResolver.getType(uri).orEmpty().lowercase()
+        require(allowed(mime)) { "Unsupported media type" }
+        var filename = "Family Touch media"
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+            if (it.moveToFirst()) filename = it.getString(0) ?: filename
+        }
+        val id = UUID.randomUUID().toString()
+        val file = File(dir(context), "$id.bin")
+        try {
+            var size = 0L
+            requireNotNull(context.contentResolver.openInputStream(uri)).use { source ->
+                file.outputStream().buffered().use { target ->
+                    val bytes = ByteArray(32768)
+                    while (true) {
+                        val count = source.read(bytes); if (count < 0) break
+                        size += count; require(size <= MAX_BYTES) { "Attachment exceeds 50 MiB" }
+                        target.write(bytes, 0, count)
+                    }
+                }
+            }
+            require(size > 0) { "Empty attachment" }
+            return Info(id, nameOf(filename), mime, size)
+        } catch (e: Exception) { file.delete(); throw e }
+    }
+    internal fun sendPrepared(context: Context, peer: Peer, info: Info, group: FamilyGroup) {
+        localUri(context, info)
+        val file = File(dir(context), info.id + ".bin")
+        val sha = digest()
+        file.inputStream().buffered().use { input ->
+            val buffer = ByteArray(32768)
+            while (true) { val count = input.read(buffer); if (count < 0) break; sha.update(buffer, 0, count) }
+        }
+        val header = group.json().put("type", "attachment").put("id", FamilyStore.deviceId)
+            .put("nick", FamilyStore.nickname).put("secret", peer.secret)
+            .put("attachmentId", info.id).put("mime", info.mime).put("name", info.name)
+            .put("size", info.size).put("sha256", toHex(sha.digest()))
+        Socket().use { socket ->
+            socket.connect(InetSocketAddress(peer.ip, Tailnet.PORT), 7000); socket.soTimeout = 90000
+            val output = socket.getOutputStream().buffered()
+            output.write((header.toString() + "\n").toByteArray())
+            file.inputStream().buffered().use { it.copyTo(output) }; output.flush()
+            require(JSONObject(Tailnet.readWireLine(socket.getInputStream().buffered(), 32768)).optBoolean("ok")) { "Attachment rejected" }
+        }
+    }
+
     suspend fun send(context: Context, peer: Peer, uris: List<Uri>, onSent: (ChatItem) -> Unit) =
         withContext(Dispatchers.IO) {
             require(uris.size in 1..MAX_BATCH) { "Select 1 to 10 attachments" }

@@ -13,7 +13,8 @@ import java.security.SecureRandom
 import java.util.UUID
 
 data class Peer(val id: String, val name: String, val ip: String, val secret: String)
-data class ChatItem(val id: String, val peerId: String, val outgoing: Boolean, val text: String, val time: Long, val delivered: Boolean)
+data class ChatItem(val id: String, val peerId: String, val outgoing: Boolean, val text: String, val time: Long, val delivered: Boolean,
+    val senderId: String = "")
 data class CallInvite(val peerId: String, val isVideo: Boolean, val offer: String = "", val outgoing: Boolean = false)
 data class CallLogRecord(val id: String, val peerId: String, val isVideo: Boolean, val outgoing: Boolean,
     val startedAt: Long, val connectedAt: Long, val endedAt: Long, val outcome: String) {
@@ -96,7 +97,7 @@ object FamilyStore {
             val arr = JSONArray(p.getString("messages", "[]"))
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
-                chat.add(ChatItem(o.getString("id"), o.getString("peer"), o.getBoolean("outgoing"), o.getString("text"), o.getLong("time"), o.optBoolean("delivered", true)))
+                chat.add(ChatItem(o.getString("id"), o.getString("peer"), o.getBoolean("outgoing"), o.getString("text"), o.getLong("time"), o.optBoolean("delivered", true), o.optString("senderId")))
             }
         } catch (_: Exception) { lastError = "Some messages could not be loaded" }
         try {
@@ -181,7 +182,7 @@ object FamilyStore {
     private fun persistMessages() {
         val a = JSONArray()
         chat.forEach { m -> a.put(JSONObject().put("id", m.id).put("peer", m.peerId).put("outgoing", m.outgoing)
-            .put("text", m.text).put("time", m.time).put("delivered", m.delivered)) }
+            .put("text", m.text).put("time", m.time).put("delivered", m.delivered).put("senderId", m.senderId)) }
         context.getSharedPreferences("identity", Context.MODE_PRIVATE).edit().putString("messages", a.toString()).apply()
     }
 }
