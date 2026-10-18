@@ -29,7 +29,7 @@ internal object FamilyDirectory {
             connection.setRequestProperty("X-FT-Nonce", nonce)
             connection.setRequestProperty("X-FT-Signature", FamilyIdentity.sign(DirectorySecurity.canonical("POST", path, device, time, nonce, bytes)))
             connection.outputStream.use { it.write(bytes) }
-            check(connection.responseCode == 200) { "Family registration unavailable" }
+            check(connection.responseCode == 200) { "Registration HTTP ${connection.responseCode}" }
             val response = connection.inputStream.use { input ->
                 val out = java.io.ByteArrayOutputStream()
                 val buffer = ByteArray(4096)
@@ -46,6 +46,8 @@ internal object FamilyDirectory {
     }
     /** Called only by the VPN's serialized watch job. Credentials never enter preferences. */
     fun enroll(context: Context, needsAuth: Boolean): String {
+        var stage = "request"
+        try {
         val rsa = DeviceProvisioning(context)
         val rsaRequest = JSONObject(rsa.request())
         val prefs = context.getSharedPreferences("directory", Context.MODE_PRIVATE)
@@ -57,10 +59,12 @@ internal object FamilyDirectory {
         return when (result.getString("state")) {
             "pending" -> "Waiting for family approval"
             "credential" -> {
+                stage = "decrypt credential"
                 val envelope = result.getString("envelope")
                 val hash = DirectorySecurity.hex(MessageDigest.getInstance("SHA-256").digest(envelope.toByteArray(Charsets.UTF_8)))
                 if (hash != prefs.getString("envelopeHash", "")) {
                     val key = rsa.decrypt(envelope.toByteArray(Charsets.UTF_8))
+                    stage = "start private network"
                     EmbeddedTailnet.api(context, "POST", "start", JSONObject().put("AuthKey", key))
                     prefs.edit().putString("envelopeHash", hash).apply()
                 }
@@ -68,6 +72,11 @@ internal object FamilyDirectory {
             }
             "approved" -> "Connecting"
             else -> "Family registration unavailable"
+        }
+        } catch (e: Exception) {
+            // Do not log exception messages, keys, envelopes, or authorization URLs.
+            android.util.Log.e("FamilyEnrollment", "Failed at $stage: ${e.javaClass.simpleName}")
+            throw e
         }
     }
     suspend fun sync(context: Context) = withContext(Dispatchers.IO) {
