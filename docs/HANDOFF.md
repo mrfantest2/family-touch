@@ -1,4 +1,10 @@
-# Family Touch handoff — embedded05 candidate
+# Family Touch handoff — embedded06 update
+
+2026-10-18 update: embedded06/version11 requests Android VPN consent automatically on first network-gate display after nickname setup. Declining leaves manual Connect available; subsequent launches do not repeatedly prompt. Existing service registration loop retries every30seconds while enabled. Signed assembleEmbedded, testEmbeddedUnitTest and lintVitalEmbedded passed. Signature matches existing internal certificate. Commit f6099d7 pushed on feature/embedded-tailscale.
+
+Broker had stopped: public enrollment returned503. Restarted the existing executable with protected state as the same Windows user; public unsigned enrollment now returns400 (reachable, rejected invalid request). Registered FamilyTouchEnrollmentBroker at current-user logon with restart-on-failure. OAuth was generated and saved previously; protected registry exists. Admission remains owner approval. Successful authenticated enrollment, family discovery and calls remain unverified; do not describe this as fully verified working connectivity.
+
+Published https://fantest.win/downloads/Family-Touch-Embedded06.apk and refreshed final alias. HTTP downloaded APK matches SHA256 1d5321860b75c93e38ac880f1f955b88593452734b5004e7696cecf6907a3120; size144365896. Drive ZIP verified size54309916: https://drive.google.com/file/d/1re0VhhOVSGAd34k_BRfz-kKVbu8zjclo/view . No device launch during this update. Older notes below are historical and superseded where inconsistent.
 
 Worktree C:/Khalil/family-touch/embedded-tailscale; branch feature/embedded-tailscale. Original source directory untouched. Read docs/RELEASE_EMBEDDED05_CANDIDATE_20261017.md and docs/superpowers/plans/2026-10-17-family-enrollment.md first.
 
