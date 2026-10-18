@@ -39,6 +39,16 @@ internal fun VpnSettings() {
     val consent = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         if (it.resultCode == Activity.RESULT_OK) start() else notice = "VPN permission was declined"
     }
+    LaunchedEffect(Unit) {
+        val preferences = context.getSharedPreferences("vpn", Context.MODE_PRIVATE)
+        if (!preferences.getBoolean("initialConsentRequested", false)) {
+            preferences.edit().putBoolean("initialConsentRequested", true).apply()
+            if (!EmbeddedTailnet.serviceActive) {
+                val intent = VpnService.prepare(context)
+                if (intent != null) consent.launch(intent) else start()
+            }
+        }
+    }
     LaunchedEffect(Unit) { while (true) {
         status = EmbeddedTailnet.status
         active = EmbeddedTailnet.serviceActive
