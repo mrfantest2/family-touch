@@ -24,7 +24,7 @@ object AttachmentTransport {
     private fun validatedId(id: String) = UUID.fromString(id).toString()
     private fun nameOf(name: String): String =
         name.replace(Regex("[^a-zA-Z0-9 ._()-]"), "_").take(110).ifBlank { "Attachment" }
-    private fun allowed(mime: String) = mime.startsWith("image/") || mime.startsWith("video/")
+    private fun allowed(mime: String) = mime.startsWith("image/") || mime.startsWith("video/") || VoiceNotePolicy.audioMime(mime)
     fun message(id: String, name: String, mime: String, size: Long) =
         "$MARK|$id|" + nameOf(name) + "|$mime|$size"
     data class Info(val id: String, val name: String, val mime: String, val size: Long)
@@ -66,7 +66,7 @@ object AttachmentTransport {
             uris.forEach { uri ->
                 val resolver = context.contentResolver
                 val mime = resolver.getType(uri).orEmpty().lowercase()
-                require(allowed(mime)) { "Only photos and videos are supported" }
+                require(allowed(mime)) { "Only photos, videos and supported audio are supported" }
                 var filename = "Family Touch file"
                 resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
                     if (it.moveToFirst()) filename = it.getString(0) ?: filename

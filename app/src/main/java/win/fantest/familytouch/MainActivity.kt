@@ -48,6 +48,7 @@ import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Videocam
 import androidx.compose.material.icons.outlined.LocationOn
+import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material3.*
@@ -393,6 +394,17 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
     viewedMedia?.let { ChatMediaViewer(it) { viewedMedia = null } }
     var locationJob by remember(peer.id) { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var locationDetails by remember(peer.id) { mutableStateOf("") }
+    var voiceNote by remember(peer.id) { mutableStateOf(false) }
+    val voicePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        if (it) voiceNote = true else FamilyStore.lastError = "Microphone permission was declined"
+    }
+    if (voiceNote) VoiceNoteDialog(onDismiss = { voiceNote = false }, onSend = { uri, done ->
+        scope.launch {
+            try { AttachmentTransport.send(context, peer, listOf(uri)) { FamilyStore.addChat(it) } }
+            catch (_: Exception) { FamilyStore.lastError = "Voice note transfer failed; please try again" }
+            finally { done() }
+        }
+    })
     DisposableEffect(peer.id) { onDispose { locationJob?.cancel() } }
     val selectMedia = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -477,7 +489,7 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
                         RoundedCornerShape(16.dp)).padding(horizontal = 15.dp, vertical = 11.dp)) {
                         val attachment = AttachmentTransport.parse(msg.text)
                         if (attachment != null) {
-                            Text((if (attachment.mime.startsWith("image/")) "Photo" else "Video") +
+                            Text((if (attachment.mime.startsWith("image/")) "Photo" else if (attachment.mime.startsWith("audio/")) "Voice / audio" else "Video") +
                                 " · " + attachment.name, color = Color.White, maxLines = 2)
                             Text(((attachment.size + 1023) / 1024).toString() + " KB",
                                 fontSize = 11.sp, color = Color(0xFFBFDBEF))
@@ -507,6 +519,10 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
         }
         Row(Modifier.fillMaxWidth().background(Color(0xFF0D2135)).padding(10.dp),
             verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = {
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
+                    voiceNote = true else voicePermission.launch(Manifest.permission.RECORD_AUDIO)
+            }, enabled = !sendingMedia) { Icon(Icons.Outlined.Mic, "Record voice note", tint = accent) }
             IconButton(onClick = { selectMedia.launch(arrayOf("image/*", "video/*")) },
                 enabled = !sendingMedia) {
                 Icon(Icons.Outlined.AttachFile, "Attach up to 10 photos or videos", tint = accent)
