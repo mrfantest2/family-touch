@@ -200,7 +200,8 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
                     1 -> CallsPage(contacts) { peer, video ->
                         if (askCallPermissions(video)) CallController.start(peer, video)
                     }
-                    2 -> ContactsPage(contacts, onOpen = { FamilyStore.selectedPeer = it; tab = 0 })
+                    2 -> ContactsPage(contacts, onOpen = { FamilyStore.selectedPeer = it; tab = 0 },
+                        onConnectionSettings = { tab = 3 })
                     else -> SettingsPage(networkStatus, onRecordings = { recordingsLibrary = true })
                 }
             }
@@ -359,8 +360,24 @@ private fun durationText(ms: Long): String {
 }
 
 @Composable
-private fun ContactsPage(peers: List<Peer>, onOpen: (String) -> Unit) {
+private fun ContactsPage(peers: List<Peer>, onOpen: (String) -> Unit, onConnectionSettings: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val connected = EmbeddedTailnet.status.connected
     Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Registered family devices", fontWeight = FontWeight.Bold)
+                Text(if (connected) FamilyStore.directoryStatus else
+                    "Private network disconnected - connect before discovery", color = muted, fontSize = 12.sp)
+            }
+            Spacer(Modifier.width(8.dp))
+            OutlinedButton(onClick = {
+                if (connected) scope.launch { FamilyDirectory.refresh(context) }
+                else onConnectionSettings()
+            }) { Text(if (connected) "Refresh" else "Connect") }
+        }
         if (peers.isEmpty()) EmptyState("Private family circle", "Registered family devices appear automatically after connecting.")
         else LazyColumn {
             items(peers, key = { it.id }) { peer ->

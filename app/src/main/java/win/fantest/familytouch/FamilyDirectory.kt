@@ -3,6 +3,7 @@ package win.fantest.familytouch
 import android.content.Context
 import android.os.Build
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.URL
@@ -90,11 +91,32 @@ internal object FamilyDirectory {
             throw e
         }
     }
+    /** Safe refresh for automatic polling and Contacts; no credentials are shown. */
+    suspend fun refresh(context: Context) {
+        try { sync(context) }
+        catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
+            val label = when {
+                e is java.io.IOException -> "Family directory unavailable - retrying automatically"
+                e.message?.contains("HTTP 403") == true -> "Device not approved for family discovery"
+                e.message?.contains("HTTP 409") == true -> "Registration conflict - check with family administrator"
+                else -> "Could not refresh registered devices - retrying automatically"
+            }
+            withContext(Dispatchers.Main) { FamilyStore.updateDirectoryStatus(label) }
+        }
+    }
     suspend fun sync(context: Context) = withContext(Dispatchers.IO) {
-        if (!EmbeddedTailnet.status.connected) return@withContext
+        if (!EmbeddedTailnet.status.connected) {
+            withContext(Dispatchers.Main) { FamilyStore.updateDirectoryStatus("Private network disconnected - connect to discover devices") }
+            return@withContext
+        }
         if (FamilyNetworkMode.selected(context) == ConnectionMode.EXTERNAL) {
             // Register the app identity only; never request a VPN credential in this build.
-            if (enroll(context, false) != "Connecting") return@withContext
+            val enrollment = enroll(context, false)
+            if (enrollment != "Connecting") {
+                withContext(Dispatchers.Main) { FamilyStore.updateDirectoryStatus(enrollment) }
+                return@withContext
+            }
         }
         val ip = EmbeddedTailnet.status.address ?: return@withContext
         val result = request("/api/v1/sync", JSONObject().put("name", FamilyStore.nickname.take(36))
@@ -107,6 +129,9 @@ internal object FamilyDirectory {
             Peer(p.getString("id"), p.getString("name"), p.getString("ip"), p.getString("secret"))
         }
         DirectorySecurity.validateRoster(peers, FamilyStore.deviceId)
-        withContext(Dispatchers.Main) { FamilyStore.applyDirectory(peers) }
+        withContext(Dispatchers.Main) {
+            FamilyStore.applyDirectory(peers)
+            FamilyStore.updateDirectoryStatus("Directory updated - " + peers.size + " other registered device(s)")
+        }
     }
 }

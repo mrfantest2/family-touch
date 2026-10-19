@@ -45,9 +45,7 @@ class PeerService : Service() {
         CallRecordingEngine.init(this)
         scope.launch {
             while (isActive) {
-                try { FamilyDirectory.sync(this@PeerService) }
-                catch (e: kotlinx.coroutines.CancellationException) { throw e }
-                catch (_: Exception) { /* Keep saved peers during temporary directory outages. */ }
+                FamilyDirectory.refresh(this@PeerService)
                 delay(20000)
             }
         }

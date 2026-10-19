@@ -60,6 +60,9 @@ object FamilyStore {
     var needsNicknamePrompt by mutableStateOf(false)
         private set
     var lastError by mutableStateOf("")
+    var directoryStatus by mutableStateOf("Connect your private network to discover registered family devices")
+        private set
+    fun updateDirectoryStatus(message: String) { directoryStatus = message }
     var selectedPeer by mutableStateOf<String?>(null)
     var incomingCall by mutableStateOf<CallInvite?>(null)
     var activeCall by mutableStateOf<CallInvite?>(null)
