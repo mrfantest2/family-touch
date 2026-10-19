@@ -98,7 +98,16 @@ class FamilyVpnService : VpnService(), libtailscale.IPNService {
                             FamilyDirectory.enroll(this@FamilyVpnService, needsAuth).also {
                                 registered = it == "Connecting"
                             }
-                        } catch (_: Exception) { "Family registration unavailable — retrying" }
+                        } catch (e: Exception) {
+                            // Log status codes only. Never log authorization URLs, envelopes or keys.
+                            val httpStatus = Regex("Registration HTTP ([0-9]{3})")
+                                .find(e.message.orEmpty())?.groupValues?.get(1)
+                            android.util.Log.e("FamilyVpnEnrollment", "Provisioning failed: " +
+                                (httpStatus?.let { "HTTP $it" } ?: e.javaClass.simpleName))
+                            if (httpStatus == "429") "Registration rate limited — retrying"
+                            else if (httpStatus == "409") "Registration identity conflict — retrying"
+                            else "Family registration unavailable — retrying"
+                        }
                         ensureActive()
                     }
                     val next = if (needsAuth) VpnConnectionStatus(registrationLabel) else VpnConnectionStatus.fromBackend(backend,
