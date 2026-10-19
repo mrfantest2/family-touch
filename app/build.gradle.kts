@@ -12,8 +12,8 @@ android {
         applicationId = "win.fantest.familytouch"
         minSdk = 29
         targetSdk = 36
-        versionCode = 15
-        versionName = "0.2.0-unified01"
+        versionCode = 16
+        versionName = "0.2.1-unified02"
         buildConfigField("boolean", "EMBEDDED_VPN", "true")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["familyTouchAppLabel"] = "Family Touch"
@@ -78,6 +78,7 @@ dependencies {
         add("${variant}Implementation", files("libs/libtailscale.aar"))
     }
     implementation("androidx.security:security-crypto:1.1.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)
     implementation("androidx.activity:activity-compose:1.9.3")

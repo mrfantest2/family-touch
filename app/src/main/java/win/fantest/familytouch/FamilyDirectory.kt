@@ -6,6 +6,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import okhttp3.Dns
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.MediaType.Companion.toMediaType
+import java.net.InetAddress
+import java.util.concurrent.TimeUnit
 import java.net.URL
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -15,6 +22,20 @@ internal object FamilyDirectory {
     // One active registry writer. Standby promotion changes routing after fencing the primary.
     private const val publicEndpoint = "https://family-api.fantest.win"
     private const val privateEndpoint = "https://agentbox.tail46be8b.ts.net:18897"
+    // External Tailscale may omit MagicDNS from Android VPN DNS settings.
+    // Pin only the trusted AgentBox tailnet routing address, never bypass
+    // HTTPS hostname verification. OkHttp maintains hostname SNI validation.
+    private val privateHttp = OkHttpClient.Builder()
+        .dns(object : Dns {
+            override fun lookup(hostname: String): List<InetAddress> =
+                if (hostname == "agentbox.tail46be8b.ts.net") {
+                    listOf(InetAddress.getByAddress(byteArrayOf(100, 65, 177.toByte(), 100)))
+                } else Dns.SYSTEM.lookup(hostname)
+        })
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .followRedirects(false)
+        .build()
     private fun request(path: String, json: JSONObject): JSONObject {
         // Connect privately once either VPN mode is online. Public registration
         // is retained for first-time built-in VPN provisioning (before login).
@@ -32,6 +53,37 @@ internal object FamilyDirectory {
         val device = FamilyIdentity.fingerprint()
         val time = (System.currentTimeMillis() / 1000).toString()
         val nonce = DirectorySecurity.hex(ByteArray(32).also { SecureRandom().nextBytes(it) })
+        if (base == privateEndpoint) {
+            val signed = FamilyIdentity.sign(DirectorySecurity.canonical("POST", path, device, time, nonce, bytes))
+            val req = Request.Builder().url(base + path)
+                .header("X-FT-Device", device).header("X-FT-Time", time)
+                .header("X-FT-Nonce", nonce).header("X-FT-Signature", signed)
+                .post(bytes.toRequestBody("application/json".toMediaType()))
+                .build()
+            privateHttp.newCall(req).execute().use { response ->
+                if (response.code >= 500) throw java.io.IOException("Registration temporarily unavailable")
+                if (response.code != 200) {
+                    val reason = runCatching { response.peekBody(120).string().trim() }.getOrDefault("")
+                    val safeReason = if (reason in setOf("forbidden", "address verification failed",
+                            "private connection address mismatch", "address already registered",
+                            "profile identity already registered", "profile identity cannot change")) reason else ""
+                    error("Registration HTTP " + response.code + ": " + safeReason)
+                }
+                val responseBody = response.body ?: throw java.io.IOException("Missing private response")
+                val data = responseBody.byteStream().use { input ->
+                    val out = java.io.ByteArrayOutputStream()
+                    val buffer = ByteArray(4096)
+                    while (out.size() <= 65536) {
+                        val n = input.read(buffer, 0, minOf(buffer.size, 65537 - out.size()))
+                        if (n < 0) break
+                        out.write(buffer, 0, n)
+                    }
+                    out.toByteArray()
+                }
+                require(data.size <= 65536)
+                return JSONObject(String(data, Charsets.UTF_8))
+            }
+        }
         val connection = URL(base + path).openConnection() as HttpsURLConnection
         try {
             connection.requestMethod = "POST"
