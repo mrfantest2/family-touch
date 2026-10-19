@@ -57,6 +57,9 @@ type KeyProvider interface {
 type IPProber interface {
 	Verify(context.Context, string, string, *ecdsa.PublicKey) error
 }
+// Private Tailnet Serve requests carry the authenticated WireGuard source IP.
+// Only the isolated tailnet-only listener in main.go may set this context key.
+type verifiedTailnetSourceKey struct{}
 type Device struct {
 	PublicKey       string
 	RSA             string
@@ -456,10 +459,18 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid address", 400)
 		return
 	}
+	// On the private Tailscale HTTPS listener the Tailscale proxy has already
+	// authenticated the originating node. The signed app identity and IP must
+	// match that same node. This avoids reverse TCP probes blocked by ACLs.
+	verifiedSource, isTailnetRequest := r.Context().Value(verifiedTailnetSourceKey{}).(string)
+	if isTailnetRequest && verifiedSource != req.IP {
+		http.Error(w, "private connection address mismatch", 403)
+		return
+	}
 	if d.IP != req.IP {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
-		if b.prober.Verify(ctx, req.IP, id, key) != nil {
+		if !isTailnetRequest && b.prober.Verify(ctx, req.IP, id, key) != nil {
 			http.Error(w, "address verification failed", 403)
 			return
 		}

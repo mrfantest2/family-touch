@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"strings"
 	"flag"
 	"log"
 	"net"
@@ -15,6 +17,7 @@ func main() {
 	state := flag.String("state-dir", filepath.Join(os.Getenv("LOCALAPPDATA"), "FamilyTouchBroker"), "private state directory outside web root")
 	trustProxy := flag.Bool("trust-proxy-client-ip", false, "trust X-FT-Client-IP only after local proxy overwrites it from its verified client address")
 	publicListen := flag.String("public-listen", "", "optional loopback API-only proxy listener; never exposes admin")
+	tailnetListen := flag.String("tailnet-listen", "", "optional loopback API-only listener for Tailscale Serve HTTPS, with verified peer source")
 	exportFile := flag.String("export-transfer", "", "export encrypted registry for standby migration, then exit")
 	importFile := flag.String("import-transfer", "", "import encrypted registry into an empty state directory, then exit")
 	flag.Parse()
@@ -90,6 +93,38 @@ func main() {
 		})
 		proxy := &http.Server{Addr: *publicListen, Handler: api, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 25 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8192}
 		go func() { log.Fatal(proxy.ListenAndServe()) }()
+	}
+	if *tailnetListen != "" {
+		localHost, _, err := net.SplitHostPort(*tailnetListen)
+		if err != nil || net.ParseIP(localHost) == nil || !net.ParseIP(localHost).IsLoopback() {
+			log.Fatal("private Tailnet API must bind to loopback only")
+		}
+		privateAPI := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != "POST" || (r.URL.Path != "/api/v1/enroll" && r.URL.Path != "/api/v1/sync") {
+				http.NotFound(w, r)
+				return
+			}
+			remoteHost, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil || net.ParseIP(remoteHost) == nil || !net.ParseIP(remoteHost).IsLoopback() {
+				http.Error(w, "private proxy only", 403)
+				return
+			}
+			// The LAST forwarded address is appended by the trusted Tailscale
+			// Serve reverse proxy. Ignore any earlier client-supplied addresses.
+			forwarded := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+			source := strings.TrimSpace(forwarded[len(forwarded)-1])
+			ip := net.ParseIP(source).To4()
+			if ip == nil || ip[0] != 100 || ip[1] < 64 || ip[1] > 127 {
+				http.Error(w, "Tailscale source required", 403)
+				return
+			}
+			b.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), verifiedTailnetSourceKey{}, source)))
+		})
+		go func() {
+			s := &http.Server{Addr: *tailnetListen, Handler: privateAPI, ReadHeaderTimeout: 5 * time.Second,
+				ReadTimeout: 25 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8192}
+			log.Fatal(s.ListenAndServe())
+		}()
 	}
 	server := &http.Server{Addr: *listen, Handler: b, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 25 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8192}
 	log.Printf("Family Touch broker listening on %s; local setup /admin", *listen)

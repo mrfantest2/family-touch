@@ -13,8 +13,13 @@ import javax.net.ssl.HttpsURLConnection
 
 internal object FamilyDirectory {
     // One active registry writer. Standby promotion changes routing after fencing the primary.
-    private val endpoints = listOf("https://family-api.fantest.win")
+    private const val publicEndpoint = "https://family-api.fantest.win"
+    private const val privateEndpoint = "https://agentbox.tail46be8b.ts.net:18897"
     private fun request(path: String, json: JSONObject): JSONObject {
+        // Connect privately once either VPN mode is online. Public registration
+        // is retained for first-time built-in VPN provisioning (before login).
+        val endpoints = if (EmbeddedTailnet.status.connected)
+            listOf(privateEndpoint, publicEndpoint) else listOf(publicEndpoint)
         var failure: java.io.IOException? = null
         for (base in endpoints) {
             try { return requestAt(base, path, json) }
@@ -41,7 +46,16 @@ internal object FamilyDirectory {
             connection.outputStream.use { it.write(bytes) }
             val code = connection.responseCode
             if (code >= 500) throw java.io.IOException("Registration temporarily unavailable")
-            check(code == 200) { "Registration HTTP $code" }
+            if (code != 200) {
+                val reason = runCatching {
+                    connection.errorStream?.bufferedReader()?.use { it.readText().take(120).trim() }
+                }.getOrNull().orEmpty()
+                // Never display authorization or credential responses from the server.
+                val safeReason = if (reason in setOf("forbidden", "address verification failed",
+                        "private connection address mismatch", "address already registered",
+                        "profile identity already registered", "profile identity cannot change")) reason else ""
+                error("Registration HTTP $code: $safeReason")
+            }
             val response = connection.inputStream.use { input ->
                 val out = java.io.ByteArrayOutputStream()
                 val buffer = ByteArray(4096)
@@ -98,8 +112,13 @@ internal object FamilyDirectory {
         catch (e: Exception) {
             val label = when {
                 e is java.io.IOException -> "Family directory unavailable - retrying automatically"
-                e.message?.contains("HTTP 403") == true -> "Device not approved for family discovery"
-                e.message?.contains("HTTP 409") == true -> "Registration conflict - check with family administrator"
+                e.message?.contains("address verification failed") == true ->
+                    "Family peer port is blocked by your VPN access policy - retrying"
+                e.message?.contains("private connection address mismatch") == true ->
+                    "VPN address changed - reconnect the private network"
+                e.message?.contains("HTTP 403") == true ->
+                    "Family registration not authorized - retrying automatically"
+                e.message?.contains("HTTP 409") == true -> "Family registration conflict - check other device profiles"
                 else -> "Could not refresh registered devices - retrying automatically"
             }
             withContext(Dispatchers.Main) { FamilyStore.updateDirectoryStatus(label) }
@@ -110,13 +129,13 @@ internal object FamilyDirectory {
             withContext(Dispatchers.Main) { FamilyStore.updateDirectoryStatus("Private network disconnected - connect to discover devices") }
             return@withContext
         }
-        if (FamilyNetworkMode.selected(context) == ConnectionMode.EXTERNAL) {
-            // Register the app identity only; never request a VPN credential in this build.
-            val enrollment = enroll(context, false)
-            if (enrollment != "Connecting") {
-                withContext(Dispatchers.Main) { FamilyStore.updateDirectoryStatus(enrollment) }
-                return@withContext
-            }
+        // Both VPN modes share one Android Keystore identity and one approval
+        // roster. Re-enrollment without an auth-key request is idempotent and
+        // recovers automatically if the broker registry was restored or reset.
+        val enrollment = enroll(context, false)
+        if (enrollment != "Connecting") {
+            withContext(Dispatchers.Main) { FamilyStore.updateDirectoryStatus(enrollment) }
+            return@withContext
         }
         val ip = EmbeddedTailnet.status.address ?: return@withContext
         val result = request("/api/v1/sync", JSONObject().put("name", FamilyStore.nickname.take(36))
