@@ -1,0 +1,8 @@
+<en-US>
+Built-in private connection by default, with an external connection option in Settings.
+Group chats and calls, in-app photos and videos, voice notes and shared location.
+Quoted replies, emoji reactions, conversation search and a shared-media gallery.
+Queued delivery retries and delivery/read status.
+Call recording requires every participant's consent and saves locally.
+Improved navigation and device registration.
+</en-US>

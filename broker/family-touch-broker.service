@@ -1,0 +1,15 @@
+[Unit]
+Description=Family Touch registration and peer discovery (AgentBox primary)
+After=network-online.target
+
+[Service]
+Type=simple
+UMask=0077
+Environment=FAMILY_TOUCH_STATE_KEY_FILE=%h/.local/share/family-touch/state.key
+ExecStart=%h/.local/share/family-touch/family-touch-broker -state-dir %h/.local/share/family-touch/state -listen 127.0.0.1:8797 -public-listen 127.0.0.1:8798
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

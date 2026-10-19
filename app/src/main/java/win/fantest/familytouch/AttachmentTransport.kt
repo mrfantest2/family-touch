@@ -1,4 +1,4 @@
-﻿package win.fantest.familytouch
+package win.fantest.familytouch
 
 import android.content.Context
 import android.content.Intent
@@ -84,7 +84,7 @@ object AttachmentTransport {
             return Info(id, nameOf(filename), mime, size)
         } catch (e: Exception) { file.delete(); throw e }
     }
-    internal fun sendPrepared(context: Context, peer: Peer, info: Info, group: FamilyGroup) {
+    internal fun sendPrepared(context: Context, peer: Peer, info: Info, group: FamilyGroup? = null) {
         localUri(context, info)
         val file = File(dir(context), info.id + ".bin")
         val sha = digest()
@@ -92,7 +92,7 @@ object AttachmentTransport {
             val buffer = ByteArray(32768)
             while (true) { val count = input.read(buffer); if (count < 0) break; sha.update(buffer, 0, count) }
         }
-        val header = group.json().put("type", "attachment").put("id", FamilyStore.deviceId)
+        val header = (group?.json() ?: JSONObject()).put("type", "attachment").put("id", FamilyStore.deviceId)
             .put("nick", FamilyStore.nickname).put("secret", peer.secret)
             .put("attachmentId", info.id).put("mime", info.mime).put("name", info.name)
             .put("size", info.size).put("sha256", toHex(sha.digest()))
@@ -107,61 +107,15 @@ object AttachmentTransport {
 
     suspend fun send(context: Context, peer: Peer, uris: List<Uri>, onSent: (ChatItem) -> Unit) =
         withContext(Dispatchers.IO) {
-            require(uris.size in 1..MAX_BATCH) { "Select 1 to 10 attachments" }
-            require(Tailnet.vpnIp(context) != null) { "Connect private network first" }
+            require(uris.size in 1..MAX_BATCH)
             uris.forEach { uri ->
-                val resolver = context.contentResolver
-                val mime = resolver.getType(uri).orEmpty().lowercase()
-                require(allowed(mime)) { "Only photos, videos and supported audio are supported" }
-                var filename = "Family Touch file"
-                resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
-                    if (it.moveToFirst()) filename = it.getString(0) ?: filename
-                }
-                val id = UUID.randomUUID().toString()
-                val dest = File(dir(context), "$id.bin")
-                val sha = digest()
-                var amount = 0L
-                try {
-                    resolver.openInputStream(uri).use { incoming ->
-                        requireNotNull(incoming) { "Cannot read attachment" }
-                        dest.outputStream().buffered().use { output ->
-                            val buf = ByteArray(32 * 1024)
-                            while (true) {
-                                val n = incoming.read(buf)
-                                if (n < 0) break
-                                amount += n
-                                require(amount <= MAX_BYTES) { "Attachment exceeds 50 MiB" }
-                                output.write(buf, 0, n)
-                                sha.update(buf, 0, n)
-                            }
-                        }
-                    }
-                    require(amount in 1..MAX_BYTES) { "Attachment is empty" }
-                    val header = JSONObject()
-                        .put("type", "attachment").put("id", FamilyStore.deviceId)
-                        .put("nick", FamilyStore.nickname).put("secret", peer.secret)
-                        .put("attachmentId", id).put("mime", mime)
-                        .put("name", nameOf(filename)).put("size", amount)
-                        .put("sha256", toHex(sha.digest()))
-                    Socket().use { socket ->
-                        socket.connect(InetSocketAddress(peer.ip, Tailnet.PORT), 7000)
-                        socket.soTimeout = 90_000
-                        val output = socket.getOutputStream().buffered()
-                        output.write((header.toString() + "\n").toByteArray(Charsets.UTF_8))
-                        dest.inputStream().buffered().use { source -> source.copyTo(output, 32 * 1024) }
-                        output.flush()
-                        val result = JSONObject(Tailnet.readWireLine(socket.getInputStream().buffered(), 32768))
-                        require(result.optBoolean("ok")) { result.optString("error", "Transfer rejected") }
-                    }
-                    withContext(Dispatchers.Main) { onSent(ChatItem(id, peer.id, true, message(id, filename, mime, amount),
-                        System.currentTimeMillis(), true)) }
-                } catch (e: Exception) {
-                    dest.delete()
-                    throw e
+                val info = prepare(context, uri)
+                withContext(Dispatchers.Main) {
+                    try { onSent(PeerOutbox.queue(peer, "", info)) }
+                    catch (e: Exception) { File(dir(context), info.id + ".bin").delete(); throw e }
                 }
             }
         }
-
     fun receive(context: Context, input: InputStream, json: JSONObject, peerId: String): ChatItem {
         val id = validatedId(json.getString("attachmentId"))
         val mime = json.getString("mime").lowercase()

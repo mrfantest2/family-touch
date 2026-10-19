@@ -87,8 +87,20 @@ internal class TailscalePlatform(private val context: Context) : AppContext {
 }
 
 internal object EmbeddedTailnet {
+    @Volatile private var appContext: Context? = null
+    fun initialize(context: Context) { appContext = context.applicationContext }
     @Volatile private var engine: libtailscale.Application? = null
-    @Volatile var status = VpnConnectionStatus("Disconnected")
+    @Volatile private var internalStatus = VpnConnectionStatus("Disconnected")
+    val engineStatus get() = internalStatus
+    var status: VpnConnectionStatus
+        get() {
+            val context = appContext
+            return if (context != null && FamilyNetworkMode.selected(context) == ConnectionMode.EXTERNAL) {
+                if (serviceActive || stopping) VpnConnectionStatus("Switching connection mode")
+                else FamilyNetworkMode.externalStatus(context)
+            } else internalStatus
+        }
+        set(value) { internalStatus = value }
     @Volatile var serviceActive = false
     @Volatile var stopping = false
     @Volatile var tunnelActive = false

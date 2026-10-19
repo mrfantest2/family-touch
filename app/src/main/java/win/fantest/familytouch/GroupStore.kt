@@ -210,6 +210,17 @@ internal object GroupStore {
             } }
         }
     }
+    suspend fun currentForSending(id: String): FamilyGroup {
+        var group = requireNotNull(find(id))
+        if (group.owner != FamilyStore.deviceId) {
+            val owner = requireNotNull(FamilyStore.find(group.owner))
+            val latest = Tailnet.send(owner, "group_snapshot", JSONObject().put("groupId", id))
+            withContext(Dispatchers.Main) { receiveUpdate(owner.id, latest) }
+            group = requireNotNull(find(id))
+        }
+        require(FamilyStore.deviceId in group.members) { "You have left this group" }
+        return group
+    }
     @Synchronized fun delivery(messageId: String): String? {
         return deliveryLabels[messageId]
     }

@@ -21,7 +21,11 @@ class RecordingCodecTest {
         val type = Class.forName("win.fantest.familytouch.CallRecordingEngine\$Recorder")
         val constructor = type.getDeclaredConstructor(Context::class.java, RecordingRequest::class.java, RecordingCall::class.java)
             .apply { isAccessible = true }
+        val constructionStarted = System.nanoTime()
         val recorder = constructor.newInstance(context, request, RecordingCall(request.sessionId, request.participants, false, emptyMap()))
+        val constructionFinished = System.nanoTime()
+        val startedAt = type.getDeclaredField("startNs").apply { isAccessible = true }.getLong(recorder)
+        val startupMs = (System.nanoTime() - startedAt) / 1_000_000
         val audio = type.getDeclaredMethod("audio", Boolean::class.javaPrimitiveType, ShortArray::class.java).apply { isAccessible = true }
         val run = type.getDeclaredMethod("run", kotlin.coroutines.Continuation::class.java).apply { isAccessible = true }
         val stop = type.getDeclaredField("stopping").apply { isAccessible = true }
@@ -29,6 +33,7 @@ class RecordingCodecTest {
             suspendCoroutineUninterceptedOrReturn<Unit> { continuation -> run.invoke(recorder, continuation) }
         }
         try {
+            assertTrue("Capture clock includes codec initialization", startedAt >= constructionStarted + (constructionFinished - constructionStarted) / 2)
             repeat(120) { packet ->
                 val local = ShortArray(480) { (sin((packet * 480 + it) * 2 * Math.PI * 440 / 48000) * 6000).toInt().toShort() }
                 val remote = ShortArray(480) { (sin((packet * 480 + it) * 2 * Math.PI * 660 / 48000) * 6000).toInt().toShort() }
@@ -39,7 +44,10 @@ class RecordingCodecTest {
         withTimeout(15000) { job.await() }
         val file = java.io.File(RecordingLibrary.folder(context), request.id + ".m4a")
         try {
-            assertTrue("Recorder must finalize a local M4A", file.isFile && file.length() > 1000)
+            val counts = listOf("microphonePackets", "playbackPackets", "writtenSamples", "lastSample").joinToString {
+                "$it=${type.getDeclaredField(it).apply { isAccessible = true }.get(recorder)}"
+            }
+            assertTrue("Recorder must finalize a local M4A (startup=${startupMs}ms, $counts)", file.isFile && file.length() > 1000)
             val extractor = MediaExtractor()
             try {
                 extractor.setDataSource(file.absolutePath)

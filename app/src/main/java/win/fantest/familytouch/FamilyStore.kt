@@ -14,7 +14,7 @@ import java.util.UUID
 
 data class Peer(val id: String, val name: String, val ip: String, val secret: String)
 data class ChatItem(val id: String, val peerId: String, val outgoing: Boolean, val text: String, val time: Long, val delivered: Boolean,
-    val senderId: String = "")
+    val senderId: String = "", val sent: Boolean = delivered, val read: Boolean = false)
 data class CallInvite(val peerId: String, val isVideo: Boolean, val offer: String = "", val outgoing: Boolean = false,
     val sessionId: String = "")
 data class CallLogRecord(val id: String, val peerId: String, val isVideo: Boolean, val outgoing: Boolean,
@@ -98,7 +98,7 @@ object FamilyStore {
             val arr = JSONArray(p.getString("messages", "[]"))
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
-                chat.add(ChatItem(o.getString("id"), o.getString("peer"), o.getBoolean("outgoing"), o.getString("text"), o.getLong("time"), o.optBoolean("delivered", true), o.optString("senderId")))
+                chat.add(ChatItem(o.getString("id"), o.getString("peer"), o.getBoolean("outgoing"), o.getString("text"), o.getLong("time"), o.optBoolean("delivered", true), o.optString("senderId"), o.optBoolean("sent", o.optBoolean("delivered", true)), o.optBoolean("read")))
             }
         } catch (_: Exception) { lastError = "Some messages could not be loaded" }
         try {
@@ -171,19 +171,47 @@ object FamilyStore {
     fun addChat(item: ChatItem) {
         if (chat.any { it.id == item.id }) return
         chat.add(item)
-        if (chat.size > 5000) chat.removeAt(0)
+        if (chat.size > 5000) {
+            val removable = chat.indexOfFirst { !it.outgoing || it.delivered }
+            if (removable >= 0) chat.removeAt(removable)
+        }
         persistMessages()
     }
 
     fun delivered(id: String) {
         val index = chat.indexOfFirst { it.id == id }
-        if (index >= 0) { chat[index] = chat[index].copy(delivered = true); persistMessages() }
+        if (index >= 0) { chat[index] = chat[index].copy(sent = true, delivered = true); persistMessages() }
+    }
+    fun sent(id: String) {
+        val index = chat.indexOfFirst { it.id == id }
+        if (index >= 0) { chat[index] = chat[index].copy(sent = true); persistMessages() }
+    }
+    fun markRead(peerId: String, ids: Set<String>) {
+        var changed = false
+        for (i in chat.indices) {
+            val item = chat[i]
+            if (item.outgoing && item.peerId == peerId && item.id in ids && !item.read) {
+                chat[i] = item.copy(sent = true, delivered = true, read = true); changed = true
+            }
+        }
+        if (changed) persistMessages()
+    }
+    fun acknowledgeIncomingRead(peerId: String, ids: Set<String>) {
+        var changed = false
+        for (i in chat.indices) {
+            val item = chat[i]
+            if (!item.outgoing && item.peerId == peerId && item.id in ids && !item.read) {
+                chat[i] = item.copy(read = true); changed = true
+            }
+        }
+        if (changed) persistMessages()
     }
 
     private fun persistMessages() {
         val a = JSONArray()
         chat.forEach { m -> a.put(JSONObject().put("id", m.id).put("peer", m.peerId).put("outgoing", m.outgoing)
-            .put("text", m.text).put("time", m.time).put("delivered", m.delivered).put("senderId", m.senderId)) }
+            .put("text", m.text).put("time", m.time).put("delivered", m.delivered).put("senderId", m.senderId)
+            .put("sent", m.sent).put("read", m.read)) }
         context.getSharedPreferences("identity", Context.MODE_PRIVATE).edit().putString("messages", a.toString()).apply()
     }
 }

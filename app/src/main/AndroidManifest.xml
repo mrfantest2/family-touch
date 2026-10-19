@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+    <queries><package android:name="com.tailscale.ipn" /></queries>
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
@@ -39,11 +39,5 @@
             android:foregroundServiceType="remoteMessaging" />
         <service android:name=".CallForegroundService" android:exported="false"
             android:foregroundServiceType="microphone|camera" />
-        <!-- Authorized VpnService is eligible for systemExempted without exact-alarm permissions.
-             AGP 8.7 lint does not model the VPN eligibility alternative. -->
-        <service android:name=".FamilyVpnService" android:permission="android.permission.BIND_VPN_SERVICE" tools:ignore="ForegroundServicePermission"
-            android:exported="true" android:foregroundServiceType="systemExempted">
-            <intent-filter><action android:name="android.net.VpnService" /></intent-filter>
-        </service>
     </application>
 </manifest>

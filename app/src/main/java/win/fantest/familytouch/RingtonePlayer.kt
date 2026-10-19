@@ -18,6 +18,7 @@ object RingtonePlayer {
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                 .build()
             player = MediaPlayer.create(context.applicationContext, R.raw.family_touch_ring, attributes, 0)?.apply {
+                setWakeMode(context.applicationContext, android.os.PowerManager.PARTIAL_WAKE_LOCK)
                 isLooping = true
                 setVolume(0.8f, 0.8f)
                 start()

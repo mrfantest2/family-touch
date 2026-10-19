@@ -1,0 +1,14 @@
+[Unit]
+Description=Family Touch API-only Cloudflare tunnel
+After=family-touch-broker.service
+Wants=family-touch-broker.service
+
+[Service]
+UMask=0077
+ExecStart=%h/.local/bin/cloudflared tunnel --config %h/.cloudflared/family-touch-agentbox.yml run family-touch-agentbox
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

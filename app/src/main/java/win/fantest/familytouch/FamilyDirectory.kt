@@ -11,8 +11,17 @@ import java.security.SecureRandom
 import javax.net.ssl.HttpsURLConnection
 
 internal object FamilyDirectory {
-    private const val base = "https://fantest.win/family-touch"
+    // One active registry writer. Standby promotion changes routing after fencing the primary.
+    private val endpoints = listOf("https://family-api.fantest.win")
     private fun request(path: String, json: JSONObject): JSONObject {
+        var failure: java.io.IOException? = null
+        for (base in endpoints) {
+            try { return requestAt(base, path, json) }
+            catch (e: java.io.IOException) { failure = e }
+        }
+        throw failure ?: java.io.IOException("Family registration unavailable")
+    }
+    private fun requestAt(base: String, path: String, json: JSONObject): JSONObject {
         val bytes = json.toString().toByteArray(Charsets.UTF_8)
         val device = FamilyIdentity.fingerprint()
         val time = (System.currentTimeMillis() / 1000).toString()
@@ -29,7 +38,9 @@ internal object FamilyDirectory {
             connection.setRequestProperty("X-FT-Nonce", nonce)
             connection.setRequestProperty("X-FT-Signature", FamilyIdentity.sign(DirectorySecurity.canonical("POST", path, device, time, nonce, bytes)))
             connection.outputStream.use { it.write(bytes) }
-            check(connection.responseCode == 200) { "Registration HTTP ${connection.responseCode}" }
+            val code = connection.responseCode
+            if (code >= 500) throw java.io.IOException("Registration temporarily unavailable")
+            check(code == 200) { "Registration HTTP $code" }
             val response = connection.inputStream.use { input ->
                 val out = java.io.ByteArrayOutputStream()
                 val buffer = ByteArray(4096)
@@ -81,6 +92,10 @@ internal object FamilyDirectory {
     }
     suspend fun sync(context: Context) = withContext(Dispatchers.IO) {
         if (!EmbeddedTailnet.status.connected) return@withContext
+        if (FamilyNetworkMode.selected(context) == ConnectionMode.EXTERNAL) {
+            // Register the app identity only; never request a VPN credential in this build.
+            if (enroll(context, false) != "Connecting") return@withContext
+        }
         val ip = EmbeddedTailnet.status.address ?: return@withContext
         val result = request("/api/v1/sync", JSONObject().put("name", FamilyStore.nickname.take(36))
             .put("profileId", FamilyStore.deviceId).put("ip", ip))

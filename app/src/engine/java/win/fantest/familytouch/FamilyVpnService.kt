@@ -53,6 +53,7 @@ class FamilyVpnService : VpnService(), libtailscale.IPNService {
             close()
             return START_NOT_STICKY
         }
+        if (FamilyNetworkMode.selected(this) != ConnectionMode.BUILT_IN) { stopSelf(); return START_NOT_STICKY }
         if (prepare(this) != null) { EmbeddedTailnet.status = VpnConnectionStatus("VPN permission required"); stopSelf(); return START_NOT_STICKY }
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel("embedded_vpn", "Private family network", NotificationManager.IMPORTANCE_LOW))
@@ -162,7 +163,7 @@ class FamilyVpnService : VpnService(), libtailscale.IPNService {
             } finally {
                 EmbeddedTailnet.tunnelActive = false
                 EmbeddedTailnet.serviceActive = false
-                if (EmbeddedTailnet.status.label in setOf("Disconnecting", "Connecting", "Reconnecting", "Waiting for internet") || EmbeddedTailnet.status.connected)
+                if (EmbeddedTailnet.engineStatus.label in setOf("Disconnecting", "Connecting", "Reconnecting", "Waiting for internet") || EmbeddedTailnet.engineStatus.connected)
                     EmbeddedTailnet.status = VpnConnectionStatus("Disconnected")
                 stopSelf()
             }

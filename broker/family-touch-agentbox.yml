@@ -1,0 +1,6 @@
+tunnel: 54ef280d-ebbf-448e-8de5-eaa3891a63fa
+credentials-file: /home/agent/.cloudflared/54ef280d-ebbf-448e-8de5-eaa3891a63fa.json
+ingress:
+  - hostname: family-api.fantest.win
+    service: http://127.0.0.1:8798
+  - service: http_status:404

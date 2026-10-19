@@ -21,6 +21,8 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.InetSocketAddress
+import java.net.SocketTimeoutException
 import java.util.UUID
 
 class PeerService : Service() {
@@ -36,6 +38,11 @@ class PeerService : Service() {
         FamilyStore.init(this)
         GroupStore.init(this)
         Tailnet.init(this)
+        PeerOutbox.init(this)
+        MessageReactions.init(this)
+        CallController.init(this)
+        GroupCallController.init(this)
+        CallRecordingEngine.init(this)
         scope.launch {
             while (isActive) {
                 try { FamilyDirectory.sync(this@PeerService) }
@@ -95,16 +102,25 @@ class PeerService : Service() {
             }
         }
         listenJob = scope.launch {
-            try {
-                ServerSocket(Tailnet.PORT).use { server ->
+            while (isActive) {
+                val address = EmbeddedTailnet.status.takeIf { it.connected }?.address
+                if (address == null) { delay(1000); continue }
+                try {
+                ServerSocket().use { server ->
+                    server.reuseAddress = true
+                    server.bind(InetSocketAddress(address, Tailnet.PORT))
+                    server.soTimeout = 1000
                     listener = server
-                    while (isActive) {
-                        val socket = server.accept()
-                        launch { handle(socket) }
+                    while (isActive && EmbeddedTailnet.status.let { it.connected && it.address == address }) {
+                        try {
+                            val socket = server.accept()
+                            launch { handle(socket) }
+                        } catch (_: SocketTimeoutException) { /* Recheck VPN address and ownership. */ }
                     }
                 }
-            } catch (ex: Exception) {
-                if (isActive) FamilyStore.lastError = "Peer listener unavailable: " + ex.message
+                } catch (ex: Exception) {
+                    if (isActive) { FamilyStore.lastError = "Peer listener unavailable: " + ex.message; delay(2000) }
+                } finally { listener = null }
             }
         }
     }
@@ -226,6 +242,17 @@ class PeerService : Service() {
                                 FamilyStore.addChat(ChatItem(messageId, id, false, txt, System.currentTimeMillis(), true))
                                 showNotification(json.optString("nick", "Family Touch"), txt.take(100), peerId = id)
                             }
+                            JSONObject()
+                        }
+                        "read_receipt" -> {
+                            val array = json.getJSONArray("messageIds")
+                            require(array.length() <= 100)
+                            val ids = (0 until array.length()).map { array.getString(it) }.toSet()
+                            kotlinx.coroutines.withContext(Dispatchers.Main) { FamilyStore.markRead(id, ids) }
+                            JSONObject()
+                        }
+                        "message_reaction" -> {
+                            kotlinx.coroutines.withContext(Dispatchers.Main) { MessageReactions.receive(id, json) }
                             JSONObject()
                         }
                         "group_call_invite", "group_call_join", "group_call_join_ack", "group_call_offer", "group_call_answer", "group_call_ice", "group_call_leave" -> {

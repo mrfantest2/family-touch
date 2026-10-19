@@ -29,7 +29,7 @@ internal object CallRecordingEngine {
     }
     fun samples(local: Boolean, samples: JavaAudioDeviceModule.AudioSamples) {
         val current = active ?: return
-        if (!RecordingCoordinator.recording || RecordingCoordinator.request?.id != current.request.id) return
+        if (!RecordingCoordinator.captureAuthorized || RecordingCoordinator.request?.id != current.request.id) return
         try {
             require(samples.audioFormat == android.media.AudioFormat.ENCODING_PCM_16BIT)
             var pcm = RecordingAudio.mono(samples.data, samples.channelCount, samples.sampleRate)
@@ -41,7 +41,7 @@ internal object CallRecordingEngine {
     }
     private class Recorder(val context: Context, val request: RecordingRequest, call: RecordingCall) {
         @Volatile var stopping = false
-        private val startNs = System.nanoTime()
+        private var startNs = 0L
         private val ringSize = RecordingAudio.RATE * 2
         private val mic = ShortArray(ringSize)
         private val playback = ShortArray(ringSize)
@@ -100,12 +100,14 @@ internal object CallRecordingEngine {
                     val last = AtomicLong(0)
                     val sink = VideoSink { frame ->
                         val now = System.nanoTime()
-                        if (!stopping && RecordingCoordinator.recording && now - last.get() > 100_000_000 && last.getAndSet(now) < now) {
+                        if (!stopping && RecordingCoordinator.captureAuthorized && now - last.get() > 100_000_000 && last.getAndSet(now) < now) {
                             runCatching { tiles[id] = tile(frame); tileTimes[id] = now }
                         }
                     }
                     track.addSink(sink); sinks.add(track to sink)
                 }
+                // Codec startup can be slow. Capture timestamps begin only when inputs can arrive.
+                startNs = System.nanoTime()
             } catch (e: Exception) {
                 detach()
                 runCatching { audioCodec?.stop() }; audioCodec?.release()

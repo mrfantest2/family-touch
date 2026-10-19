@@ -17,7 +17,7 @@ object Tailnet {
     const val PORT = 48321
     @Volatile private var appContext: Context? = null
 
-    fun init(context: Context) { appContext = context.applicationContext }
+    fun init(context: Context) { appContext = context.applicationContext; EmbeddedTailnet.initialize(context) }
 
     /** Read one newline-terminated wire frame with a strict byte bound. */
     internal fun readWireLine(input: InputStream, maxBytes: Int = 131072): String {
@@ -68,7 +68,7 @@ object Tailnet {
         return Peer(id, json.getString("nick").take(36), ip, secret)
     }
 
-    suspend fun send(peer: Peer, type: String, payload: JSONObject = JSONObject()): JSONObject = withContext(Dispatchers.IO) {
+    suspend fun send(peer: Peer, type: String, payload: JSONObject = JSONObject(), onWritten: (suspend () -> Unit)? = null): JSONObject = withContext(Dispatchers.IO) {
         require(isTailIp(peer.ip)) { "private network-only connections" }
         val ctx = requireNotNull(appContext) { "Family Touch networking is not initialized" }
         check(vpnIp(ctx) != null) { "Connect to private network before messaging or calling" }
@@ -82,6 +82,7 @@ object Tailnet {
             socket.connect(InetSocketAddress(peer.ip, PORT), 4500)
             socket.soTimeout = 8000
             socket.getOutputStream().bufferedWriter(Charsets.UTF_8).apply { write(req.toString()); newLine(); flush() }
+            onWritten?.invoke()
             val response = readWireLine(socket.getInputStream().buffered(), 32768)
             val result = JSONObject(response)
             if (!result.optBoolean("ok")) throw IllegalStateException(result.optString("error", "Request rejected"))

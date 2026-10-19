@@ -41,6 +41,9 @@ internal object RecordingCoordinator {
     private var startedNotice = false
     private var timeout: Job? = null
     private var voteSync: Job? = null
+    private var consentWatch: Job? = null
+    @Volatile private var lease: RecordingProofLease? = null
+    val captureAuthorized get() = recording && lease?.valid(android.os.SystemClock.elapsedRealtime()) == true
     var startCapture: ((RecordingRequest, RecordingCall) -> Unit)? = null
     var stopCapture: (() -> Unit)? = null
     fun current(): RecordingCall? {
@@ -75,18 +78,32 @@ internal object RecordingCoordinator {
         request = req; policy = RecordingConsent(req.sessionId, req.id, req.participants)
         approvals = emptySet(); recording = false; startedNotice = false; status = "Waiting for everyone's consent"
         timeout?.cancel(); timeout = scope.launch { delay(60000); if (request?.id == req.id && !recording) stop("Recording consent timed out") }
+        lease = RecordingProofLease(req.participants - FamilyStore.deviceId, 15000)
+        consentWatch?.cancel()
+        consentWatch = scope.launch {
+            while (request?.id == req.id) {
+                delay(500)
+                if (recording && !captureAuthorized) stop("Recording consent could not be verified")
+            }
+        }
         voteSync?.cancel()
         voteSync = scope.launch {
-            while (request?.id == req.id && !recording) {
+            while (request?.id == req.id) {
                 if (FamilyStore.deviceId in approvals) {
-                    req.participants.filter { it !in approvals }.forEach { id ->
+                    req.participants.filter { it != FamilyStore.deviceId }.forEach { id ->
                         val peer = FamilyStore.find(id) ?: return@forEach
                         try {
                             val result = Tailnet.send(peer, "record_check", json(req))
                             if (result.optBoolean("accepted") && request?.id == req.id) {
+                                lease?.renew(id, true, android.os.SystemClock.elapsedRealtime())
                                 policy?.accept(req.sessionId, req.id, id); approvals = policy?.approvals.orEmpty(); maybeStart()
+                            } else if (request?.id == req.id && id in approvals) {
+                                lease?.renew(id, false, android.os.SystemClock.elapsedRealtime())
+                                stop("Recording consent withdrawn")
                             }
-                        } catch (_: Exception) { /* The 60-second consent deadline remains authoritative. */ }
+                        } catch (_: Exception) {
+                            if (request?.id == req.id && recording) stop("Recording consent could not be verified")
+                        }
                     }
                 }
                 delay(2000)
@@ -101,7 +118,7 @@ internal object RecordingCoordinator {
     }
     private fun maybeStart() {
         val req = request ?: return
-        if (policy?.allowed != true || recording) return
+        if (policy?.allowed != true || recording || lease?.valid(android.os.SystemClock.elapsedRealtime()) != true) return
         val call = current()
         if (call == null || call.sessionId != req.sessionId || call.participants != req.participants) { stop("Call membership changed"); return }
         if (req.requester == FamilyStore.deviceId) {
@@ -125,6 +142,7 @@ internal object RecordingCoordinator {
                 data.getString("callSession") == call.sessionId && (!data.getBoolean("video") || call.video))
             require(request == null || request?.id == id) { "Another recording request is active" }
             if (request == null) install(RecordingRequest(id, call.sessionId, sender, members, data.getBoolean("video")))
+            lease?.renew(sender, true, android.os.SystemClock.elapsedRealtime())
             policy!!.accept(call.sessionId, id, sender); approvals = policy!!.approvals
             // Every vote is sent directly to every participant, not vouched for by the requester.
             if (FamilyStore.deviceId in approvals) broadcast("record_vote", request!!)
@@ -134,7 +152,9 @@ internal object RecordingCoordinator {
         require(req.id == id && req.sessionId == data.getString("callSession") && sender in req.participants)
         when (type) {
             "record_vote" -> {
-                if (policy!!.accept(req.sessionId, req.id, sender)) { approvals = policy!!.approvals; maybeStart() }
+                if (policy!!.accept(req.sessionId, req.id, sender)) {
+                    lease?.renew(sender, true, android.os.SystemClock.elapsedRealtime())
+                    approvals = policy!!.approvals; maybeStart() }
             }
             "record_start" -> { require(sender == req.requester); startedNotice = true; maybeStart() }
             "record_stop" -> stop("Recording stopped", announce = false)
@@ -147,6 +167,8 @@ internal object RecordingCoordinator {
     }
     fun stop(reason: String = "Recording stopped", announce: Boolean = true) {
         val req = request ?: return
+        lease?.revoke(); lease = null
+        consentWatch?.cancel(); consentWatch = null
         policy?.withdraw(FamilyStore.deviceId)
         // Close capture eligibility before any asynchronous finalization.
         val owned = req.requester == FamilyStore.deviceId

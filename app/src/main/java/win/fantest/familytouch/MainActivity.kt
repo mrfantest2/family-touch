@@ -25,6 +25,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
@@ -97,9 +100,9 @@ class MainActivity : ComponentActivity() {
         FamilyStore.init(this)
         GroupStore.init(this)
         Tailnet.init(this)
-        if (getSharedPreferences("vpn", Context.MODE_PRIVATE).getBoolean("enabled", false) && android.net.VpnService.prepare(this) == null) {
-            ContextCompat.startForegroundService(this, Intent(this, FamilyVpnService::class.java))
-        }
+        PeerOutbox.init(this)
+        MessageReactions.init(this)
+        resumeFamilyNetwork(this)
         CallController.init(this)
         GroupCallController.init(this)
         CallRecordingEngine.init(this)
@@ -224,7 +227,8 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
     if (!FamilyStore.needsNicknamePrompt && !networkStatus.connected && incoming == null && active == null && groupCall == null) {
         AlertDialog(onDismissRequest = {}, title = { Text("Turn on your private connection") },
             text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Family Touch needs VPN permission for private calls and messages. Your family devices will appear automatically.")
+                Text(if (FamilyNetworkMode.selected(context) == ConnectionMode.BUILT_IN) "Family Touch needs VPN permission for private calls and messages. Your family devices will appear automatically."
+                    else "This version needs the standalone Tailscale app connected to your family network. Family Touch does not create or replace a VPN.")
                 VpnSettings()
             } }, confirmButton = {})
     }
@@ -416,8 +420,42 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
     val group = GroupStore.find(peer.id)
     val scope = rememberCoroutineScope()
     var draft by remember(peer.id) { mutableStateOf("") }
+    var replyTo by remember(peer.id) { mutableStateOf<ChatItem?>(null) }
+    var actionMessage by remember(peer.id) { mutableStateOf<ChatItem?>(null) }
+    var gallery by remember(peer.id) { mutableStateOf(false) }
+    var searching by remember(peer.id) { mutableStateOf(false) }
+    var query by remember(peer.id) { mutableStateOf("") }
+    if (gallery) MediaGallery(peer.id) { gallery = false }
+    actionMessage?.let { item -> AlertDialog(onDismissRequest = { actionMessage = null }, title = { Text("Message") },
+        text = { Column {
+            Text((AttachmentTransport.parse(item.text)?.name ?: item.text).take(180), maxLines = 3)
+            TextButton(onClick = { replyTo = item; actionMessage = null }) { Text("Reply") }
+            Row(Modifier.horizontalScroll(rememberScrollState())) {
+                ReactionPolicy.choices.forEach { emoji -> TextButton(onClick = {
+                    try { MessageReactions.react(item, emoji); actionMessage = null }
+                    catch (_: Exception) { FamilyStore.lastError = "Reaction queue is full; try again after reconnecting" }
+                }) { Text(emoji) } }
+            }
+            TextButton(onClick = {
+                try { MessageReactions.react(item, ""); actionMessage = null }
+                catch (_: Exception) { FamilyStore.lastError = "Reaction queue is full; try again after reconnecting" }
+            }) { Text("Remove my reaction") }
+        } }, confirmButton = { TextButton(onClick = { actionMessage = null }) { Text("Close") } }) }
     val context = LocalContext.current
     var locationPreview by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(peer.id) {
+        while (true) {
+            if (group == null && FamilyStore.appVisible) {
+                val ids = MessageDelivery.nextUnread(FamilyStore.messages, peer.id)
+                if (ids.isNotEmpty()) try {
+                    Tailnet.send(peer, "read_receipt", JSONObject().put("messageIds", org.json.JSONArray(ids)))
+                    FamilyStore.acknowledgeIncomingRead(peer.id, ids.toSet())
+                } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { /* Old/offline clients retain Delivered, never falsely Read. */ }
+            }
+            delay(10000)
+        }
+    }
     var locationBusy by remember { mutableStateOf(false) }
     var sendingMedia by remember { mutableStateOf(false) }
     var editGroup by remember(peer.id) { mutableStateOf(false) }
@@ -460,23 +498,15 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
         }
     }
 
-    val sendChat: (String) -> Unit = { message ->
+    val sendChat: (String) -> Boolean = { message ->
         val text = message.trim()
         if (text.isNotEmpty() && group != null) {
-            try { GroupStore.queue(group, text) }
-            catch (e: Exception) { FamilyStore.lastError = e.message ?: "Group message could not be queued" }
+            try { require(text.length <= 6000) { "Reply is too long; shorten it before sending" }; GroupStore.queue(group, text); true }
+            catch (e: Exception) { FamilyStore.lastError = e.message ?: "Group message could not be queued"; false }
         } else if (text.isNotEmpty()) {
-            val id = UUID.randomUUID().toString()
-            FamilyStore.addChat(ChatItem(id, peer.id, true, text, System.currentTimeMillis(), false))
-            scope.launch {
-                try {
-                    Tailnet.send(peer, "message", JSONObject().put("text", text).put("messageId", id))
-                    FamilyStore.delivered(id)
-                } catch (e: Exception) {
-                    FamilyStore.lastError = "Message not delivered: " + e.message
-                }
-            }
-        }
+            try { PeerOutbox.queue(peer, text); true }
+            catch (e: Exception) { FamilyStore.lastError = e.message ?: "Message could not be queued"; false }
+        } else false
     }
     val requestLocation: () -> Unit = {
         locationBusy = true
@@ -516,7 +546,9 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
             })
     }
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(10.dp), horizontalArrangement = Arrangement.End) {
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(10.dp), horizontalArrangement = Arrangement.End) {
+            TextButton(onClick = { searching = !searching; if (!searching) query = "" }) { Text("Search") }
+            TextButton(onClick = { gallery = true }) { Text("Media") }
             if (group != null) TextButton(onClick = {
                 if (group.owner == FamilyStore.deviceId) editGroup = true
                 else scope.launch {
@@ -527,12 +559,15 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
             IconButton(onClick = { onCall(false) }) { Icon(Icons.Outlined.Call, "Voice call", tint = Color(0xFF54DDA6)) }
             IconButton(onClick = { onCall(true) }) { Icon(Icons.Outlined.Videocam, "Video call", tint = accent) }
         }
-        val history = FamilyStore.messages.filter { it.peerId == peer.id }
+        if (searching) OutlinedTextField(query, { query = it.take(200) }, Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            placeholder = { Text("Search this conversation") }, singleLine = true)
+        val history = FamilyStore.messages.filter { it.peerId == peer.id && (query.isBlank() || it.text.contains(query, ignoreCase = true)) }
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)) {
             items(history, key = { it.id }) { msg ->
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = if (msg.outgoing) Arrangement.End else Arrangement.Start) {
-                    Column(Modifier.widthIn(max = 300.dp).background(if (msg.outgoing) Color(0xFF1268AE) else surface,
+                    Column(Modifier.widthIn(max = 300.dp).pointerInput(msg.id) { detectTapGestures(onLongPress = { actionMessage = msg }) }
+                        .background(if (msg.outgoing) Color(0xFF1268AE) else surface,
                         RoundedCornerShape(16.dp)).padding(horizontal = 15.dp, vertical = 11.dp)) {
                         val attachment = AttachmentTransport.parse(msg.text)
                         if (group != null && !msg.outgoing) Text(FamilyStore.find(msg.senderId)?.name ?: "Family member", fontSize = 11.sp)
@@ -557,14 +592,21 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
                                     }
                                 })
                         } else Text(msg.text, color = Color.White)
+                        val reactions = MessageReactions.summary(msg.id)
+                        if (reactions.isNotBlank()) Text(reactions, color = Color.White)
                         Text(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(msg.time)),
                             color = Color(0xFFBFDBEF), fontSize = 10.sp)
-                        if (msg.outgoing) Text(if (msg.delivered) "Delivered" else GroupStore.delivery(msg.id) ?: "Not delivered",
+                        if (msg.outgoing) Text(if (group != null) (if (msg.delivered) "Delivered" else GroupStore.delivery(msg.id) ?: "Queued")
+                            else MessageDelivery.label(msg.sent, msg.delivered, msg.read),
                             color = Color(0xFFBFDBEF), fontSize = 10.sp)
                     }
                 }
             }
         }
+        replyTo?.let { item -> Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Replying to: " + (AttachmentTransport.parse(item.text)?.name ?: item.text).take(140), Modifier.weight(1f), maxLines = 2)
+            TextButton(onClick = { replyTo = null }) { Text("Cancel") }
+        } }
         Row(Modifier.fillMaxWidth().background(Color(0xFF0D2135)).padding(10.dp),
             verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = {
@@ -589,9 +631,9 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
                 shape = RoundedCornerShape(24.dp), maxLines = 5)
             Spacer(Modifier.width(6.dp))
             FilledIconButton(enabled = draft.isNotBlank(), onClick = {
-                val text = draft.trim()
-                draft = ""
-                sendChat(text)
+                val quoted = replyTo?.let { (AttachmentTransport.parse(it.text)?.name ?: it.text).replace('\n', ' ').take(180) }
+                val text = if (quoted != null) "↪ $quoted\n\n${draft.trim()}" else draft.trim()
+                if (sendChat(text)) { draft = ""; replyTo = null }
             }) { Icon(Icons.Outlined.Send, "Send") }
         }
     }

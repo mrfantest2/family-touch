@@ -12,8 +12,9 @@ android {
         applicationId = "win.fantest.familytouch"
         minSdk = 29
         targetSdk = 36
-        versionCode = 14
-        versionName = "0.2.0-family-groups01"
+        versionCode = 15
+        versionName = "0.2.0-unified01"
+        buildConfigField("boolean", "EMBEDDED_VPN", "true")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["familyTouchAppLabel"] = "Family Touch"
     }
@@ -42,9 +43,25 @@ android {
         create("embedded") {
             initWith(getByName("release"))
             applicationIdSuffix = ".embedded"
-            versionNameSuffix = "-standalone"
+            versionNameSuffix = "-embedded"
             manifestPlaceholders["familyTouchAppLabel"] = "Family Touch"
             matchingFallbacks += listOf("release")
+        }
+        create("external") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".external"
+            versionNameSuffix = "-external"
+            buildConfigField("boolean", "EMBEDDED_VPN", "false")
+            manifestPlaceholders["familyTouchAppLabel"] = "Family Touch External"
+            matchingFallbacks += listOf("release")
+        }
+    }
+    sourceSets {
+        listOf("debug", "release", "qa", "embedded").forEach { variant ->
+            getByName(variant) {
+                java.srcDir("src/engine/java")
+                manifest.srcFile("src/engine/AndroidManifest.xml")
+            }
         }
     }
     compileOptions {
@@ -57,7 +74,9 @@ android {
 }
 
 dependencies {
-    implementation(files("libs/libtailscale.aar"))
+    listOf("debug", "release", "qa", "embedded").forEach { variant ->
+        add("${variant}Implementation", files("libs/libtailscale.aar"))
+    }
     implementation("androidx.security:security-crypto:1.1.0")
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)
