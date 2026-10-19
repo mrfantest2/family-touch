@@ -35,6 +35,7 @@ const (
 	pendingTTL         int64 = 24 * 60 * 60
 	maxSources               = 4096
 	sourceRequestLimit       = 120
+	maxDeletionHistory       = 250 // Bounded deletion history; no removed keys or device IDs retained.
 )
 
 type sourceWindow struct {
@@ -75,6 +76,11 @@ type Device struct {
 	LastIssue       int64
 	CreatedAt       int64
 }
+type DeletedRecord struct {
+	Name string
+	Model string
+	DeletedAt int64
+}
 type Config struct {
 	OAuthID     string
 	OAuthSecret string
@@ -86,6 +92,7 @@ type diskState struct {
 	Config  Config
 	Devices map[string]*Device
 	Nonces  map[string]int64
+	Deleted []DeletedRecord
 }
 type Broker struct {
 	mu                 sync.Mutex
@@ -97,6 +104,7 @@ type Broker struct {
 	master             []byte
 	devices            map[string]*Device
 	nonces             map[string]int64
+	deleted            []DeletedRecord
 	csrf               string
 	sources            map[string]sourceWindow
 	trustProxyClientIP bool
@@ -131,6 +139,10 @@ func NewBroker(dir string, p Protector, k KeyProvider, probe IPProber) (*Broker,
 		b.master = s.Master
 		b.config = s.Config
 		b.devices = s.Devices
+		b.deleted = s.Deleted
+		if len(b.deleted) > maxDeletionHistory {
+			b.deleted = b.deleted[len(b.deleted)-maxDeletionHistory:]
+		}
 		if s.Nonces != nil {
 			b.nonces = s.Nonces
 		}
@@ -162,7 +174,7 @@ func NewBroker(dir string, p Protector, k KeyProvider, probe IPProber) (*Broker,
 	return b, nil
 }
 func (b *Broker) save() error {
-	plain, e := json.Marshal(diskState{b.master, b.config, b.devices, b.nonces})
+	plain, e := json.Marshal(diskState{b.master, b.config, b.devices, b.nonces, b.deleted})
 	if e != nil {
 		return e
 	}
@@ -581,7 +593,7 @@ func (p oauthProvider) AuthKey(ctx context.Context) (string, error) {
 	return result.Key, nil
 }
 
-var adminTemplate = template.Must(template.New("admin").Parse(`<!doctype html><meta charset="utf-8"><title>Family Touch local administration</title><h1>Family Touch administration</h1><form method="post" action="/admin/setup"><input type="hidden" name="csrf" value="{{.CSRF}}"><label>OAuth client ID <input type="password" name="id" required autocomplete="off"></label><label>OAuth secret <input type="password" name="secret" required autocomplete="new-password"></label><label>Admission <select name="admission"><option value="approval">Owner approval</option><option value="auto">Automatic (requires isolated policy)</option></select></label><button>Save protected configuration</button></form><p>Current automatic admission: {{.Auto}}</p>{{range .Rows}}<form method="post" action="/admin/device"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="device" value="{{.ID}}"><p>{{.ID}} — {{.Device.Name}} — {{.Device.Model}} (approved {{.Device.Approved}}, revoked {{.Device.Revoked}})</p><button name="action" value="approve">Approve</button><button name="action" value="revoke">Revoke</button></form>{{end}}`))
+var adminTemplate = template.Must(template.New("admin").Parse(`<!doctype html><meta charset="utf-8"><title>Family Touch local administration</title><h1>Family Touch administration</h1><form method="post" action="/admin/setup"><input type="hidden" name="csrf" value="{{.CSRF}}"><label>OAuth client ID <input type="password" name="id" required autocomplete="off"></label><label>OAuth secret <input type="password" name="secret" required autocomplete="new-password"></label><label>Admission <select name="admission"><option value="approval">Owner approval</option><option value="auto">Automatic (requires isolated policy)</option></select></label><button>Save protected configuration</button></form><p>Current automatic admission: {{.Auto}}</p>{{range .Rows}}<form method="post" action="/admin/device"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="device" value="{{.ID}}"><p>{{.ID}} — {{.Device.Name}} — {{.Device.Model}} (approved {{.Device.Approved}}, revoked {{.Device.Revoked}})</p><button name="action" value="approve">Approve</button><button name="action" value="revoke">Revoke</button><button name="action" value="delete">Delete</button></form>{{end}}<h2>Deleted device history (UTC Unix timestamps)</h2>{{range .Deleted}}<p class="deletion">{{.Name}} — {{.Model}} — {{.DeletedAt}}</p>{{end}}`))
 
 func (b *Broker) admin(w http.ResponseWriter, r *http.Request) {
 	host, _, e := net.SplitHostPort(r.RemoteAddr)
@@ -607,7 +619,8 @@ func (b *Broker) admin(w http.ResponseWriter, r *http.Request) {
 			CSRF string
 			Auto bool
 			Rows []row
-		}{b.csrf, b.config.AutoApprove, rows})
+			Deleted []DeletedRecord
+		}{b.csrf, b.config.AutoApprove, rows, b.deleted})
 		return
 	}
 	origin := r.Header.Get("Origin")
@@ -659,6 +672,13 @@ func (b *Broker) admin(w http.ResponseWriter, r *http.Request) {
 			d.Revoked = true
 			d.IP = ""
 			d.Envelope = ""
+		case "delete":
+			// Remove the active identity; audit stores no cryptographic keys or device IDs.
+			b.deleted = append(b.deleted, DeletedRecord{d.Name, d.Model, time.Now().Unix()})
+			if len(b.deleted) > maxDeletionHistory {
+				b.deleted = b.deleted[len(b.deleted)-maxDeletionHistory:]
+			}
+			delete(b.devices, r.Form.Get("device"))
 		default:
 			http.Error(w, "invalid action", 400)
 			return
