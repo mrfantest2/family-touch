@@ -81,14 +81,18 @@ internal object FamilyDirectory {
             .put("publicKey", FamilyIdentity.publicKey()).put("rsaPublicKey", rsaRequest.getString("publicKey"))
             .put("rsaDeviceId", rsa.deviceId()).put("profileId", FamilyStore.deviceId)
             .put("name", FamilyStore.nickname.take(36)).put("model", Build.MODEL.take(80))
-            .put("needsAuth", needsAuth).put("previousEnvelopeHash", prefs.getString("envelopeHash", "")))
+            .put("needsAuth", needsAuth).put("previousEnvelopeHash",
+                if (needsAuth) "" else prefs.getString("envelopeHash", "")))
         return when (result.getString("state")) {
             "pending" -> "Waiting for family approval"
             "credential" -> {
                 stage = "decrypt credential"
                 val envelope = result.getString("envelope")
                 val hash = DirectorySecurity.hex(MessageDigest.getInstance("SHA-256").digest(envelope.toByteArray(Charsets.UTF_8)))
-                if (hash != prefs.getString("envelopeHash", "")) {
+                // After process/VPN replacement the previous credential may already be
+                // marked as applied while the private engine needs authentication.
+                // A cached envelope must be replayed when backend state is NeedsLogin.
+                if (needsAuth || hash != prefs.getString("envelopeHash", "")) {
                     val key = rsa.decrypt(envelope.toByteArray(Charsets.UTF_8))
                     stage = "start private network"
                     EmbeddedTailnet.api(context, "POST", "start", JSONObject().put("AuthKey", key))
