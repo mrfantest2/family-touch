@@ -1,0 +1,30 @@
+# Family Touch v0.3 — two-app architecture and visual redesign
+
+## Approved product requirements
+Family Touch is the family-facing app, built-in VPN only. No separate Tailscale installation or external VPN mode in the shipping variant. Family Touch Admin is a **different Android package** for the authorized Samsung Galaxy S25; it must leave Android's VPN slot free and use normal Android DNS/internet plus an HTTPS connection to AgentBox. The Admin product must eventually offer the same chats, calls and contacts as Family Touch, plus administrator management.
+
+## Visual specification (approved mockups)
+Use a WhatsApp-inspired interaction model without copying WhatsApp branding: light neutral background `#F7FAF8`, white surfaces `#FFFFFF`, emerald primary `#008F56`, dark green-neutral text `#142722`, muted text `#667670`, soft mint `#E4F6EB`, circular avatars, compact rounded rows, accessible typography, consistent floating actions and a persistent navigation bar.
+- Family: Chats / Calls / Contacts / Settings; display private VPN health unobtrusively.
+- Admin: Login / Chats / Calls / Contacts / Admin; Admin sections for users, devices, approval, revoke, delete (typed confirmation), timestamped audit and diagnostics.
+- Maintain legible color contrast and RTL layouts. Use real backend status, not fabricated online status. Never show fake family messages in production.
+
+## Checkpoints and state
+- [x] v16 remains the published stable release, untouched.
+- [x] Feature branch `feature/family-touch-v03-dual-apps` created from v16.
+- [x] Family build migrates prior external-mode choice to built-in and removes mode-selection UI.
+- [x] Family visual palette migrated to light emerald. Full screen-by-screen polish still pending.
+- [x] Separate `admin` build target/package with a native Android login shell and current authenticated management dashboard over HTTPS, no VPN service.
+- [ ] Admin *server-side* S25 device binding using Android Keystore hardware-backed key plus server enrollment / revocation. A client-side model check is only provisional and is **not a security boundary**.
+- [ ] Replace the temporary admin Basic-auth WebView integration with authenticated, device-bound native API sessions and CSRF-protected management actions; do not persist passwords.
+- [ ] Admin chats / calls / contacts through an authenticated, encrypted HTTPS messaging and WebRTC signaling relay that bridges to approved private peers. No direct 100.x tailnet route or use of Android VPN APIs from Admin. For media calls, provide secure relay/TURN and proper consent, fail closed if unavailable.
+- [ ] Roles, server-verified user accounts and permissions, audit retention policy and admin actions.
+- [ ] Test foreground/background listener recovery and calls with offline/reconnecting peers.
+- [ ] UI screenshots and accessibility tests on S25 and OP7; audit contact, chat, voice and video flows.
+- [ ] Deploy family build to OP7 for QA, Admin build only to S25 **after** server-bound device authorization is validated. No production rollout or downgrade in place before end-to-end test.
+
+## Networking and privacy
+A DNS resolver only resolves hostnames; it does not connect the Admin phone to Tailscale private addresses. Therefore the Admin app uses `https://family-admin.fantest.win/admin` for existing management, and a **separately authenticated HTTPS relay** is required before chats/calls can become functional. The family APK uses its embedded VPN engine and existing private broker; use no reusable auth tokens in source control. Android normal DNS settings should not be overwritten.
+
+## Build and validation
+Build tasks: `:app:assembleEmbedded`, `:app:assembleAdmin`, `:app:testQaUnitTest`. Inspect the merged Admin manifest and verify that it contains **no** `android.net.VpnService` intent filter, `BIND_VPN_SERVICE` service or implicit VPN startup. App signing secrets remain only on the authorized build host, never in GitHub. Admin credentials remain memory-only in the early preview; avoid recording user passwords in logcat or analytics.

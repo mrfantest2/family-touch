@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+    <!-- Admin uses HTTPS; no Android VpnService or foreground peer listener. -->
+    <application android:label="Family Touch Admin">
+        <service android:name=".PeerService" tools:node="remove" />
+        <service android:name=".CallForegroundService" tools:node="remove" />
+    </application>
+</manifest>
