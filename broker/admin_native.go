@@ -9,12 +9,14 @@ import (
 )
 
 type nativeDevice struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Model     string `json:"model"`
-	Approved  bool   `json:"approved"`
-	Revoked   bool   `json:"revoked"`
-	CreatedAt int64  `json:"createdAt"`
+	ID                string `json:"id"`
+	Name              string `json:"name"`
+	Model             string `json:"model"`
+	Approved          bool   `json:"approved"`
+	Revoked           bool   `json:"revoked"`
+	CreatedAt         int64  `json:"createdAt"`
+	LastAuthIssued    int64  `json:"lastAuthIssued"`
+	CredentialExpires int64  `json:"credentialExpires"`
 }
 type nativeDeleted struct {
 	Name      string `json:"name"`
@@ -43,6 +45,7 @@ func (b *Broker) adminNative(w http.ResponseWriter, r *http.Request) {
 			devices = append(devices, nativeDevice{
 				ID: id, Name: d.Name, Model: d.Model, Approved: d.Approved,
 				Revoked: d.Revoked, CreatedAt: d.CreatedAt,
+				LastAuthIssued: d.LastIssue, CredentialExpires: d.EnvelopeExpires,
 			})
 		}
 		sort.Slice(devices, func(i, j int) bool {

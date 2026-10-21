@@ -115,7 +115,9 @@ class MainActivity : ComponentActivity() {
         if (!FamilyStore.needsNicknamePrompt) requestNotificationPermission()
         setContent {
             MaterialTheme(colorScheme = lightColorScheme(
-                primary = accent, onPrimary = Color.White, background = bg, surface = surface, onBackground = ink, onSurface = ink
+                primary = accent, onPrimary = Color.White, background = bg, surface = surface, onBackground = ink, onSurface = ink,
+                secondary = accent, secondaryContainer = Color(0xFFDBF3E6),
+                onSecondaryContainer = ink, surfaceContainer = surface, surfaceVariant = Color(0xFFF0F7F2)
             )) { Surface(modifier = Modifier.fillMaxSize(), color = bg, contentColor = ink) { FamilyTouchUI(askCallPermissions = { video ->
                 val permissions = if (video) arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
                     else arrayOf(Manifest.permission.RECORD_AUDIO)

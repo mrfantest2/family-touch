@@ -39,8 +39,9 @@ internal object FamilyDirectory {
     private fun request(path: String, json: JSONObject): JSONObject {
         // Connect privately once either VPN mode is online. Public registration
         // is retained for first-time built-in VPN provisioning (before login).
-        val endpoints = if (EmbeddedTailnet.status.connected)
-            listOf(privateEndpoint, publicEndpoint) else listOf(publicEndpoint)
+        // MASTER-PC replaced offline AgentBox. Every family device uses the
+        // verified Cloudflare HTTPS API; never wait for the stale AgentBox tailnet IP.
+        val endpoints = listOf(publicEndpoint)
         var failure: java.io.IOException? = null
         for (base in endpoints) {
             try { return requestAt(base, path, json) }

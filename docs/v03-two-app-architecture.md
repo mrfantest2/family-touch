@@ -28,3 +28,11 @@ A DNS resolver only resolves hostnames; it does not connect the Admin phone to T
 
 ## Build and validation
 Build tasks: `:app:assembleEmbedded`, `:app:assembleAdmin`, `:app:testQaUnitTest`. Inspect the merged Admin manifest and verify that it contains **no** `android.net.VpnService` intent filter, `BIND_VPN_SERVICE` service or implicit VPN startup. App signing secrets remain only on the authorized build host, never in GitHub. Admin credentials remain memory-only in the early preview; avoid recording user passwords in logcat or analytics.
+### v0.3.1-connect01 (build 18) follow-up
+- Removed obsolete private enrollment attempts to AgentBox, which is offline; enrollment now uses the working MASTER-PC public HTTPS broker.
+- After 90 seconds of unchanged NeedsLogin/NoState, the family VPN reports delayed sign-in with automatic retry rather than an indefinite unqualified 'Registering this device' message. This is not proof the embedded engine completed authentication.
+- Native Admin uses opt-in Remember my login, encrypted via Android Keystore-backed preferences. Saved credentials are only written after a successful server authentication, revalidated automatically on reopen, and erased on Sign out.
+- Refined navigation colors, surfaces, and device cards to match the green-and-white mockup; further layout/UX review pending.
+- Broker authenticated native Admin API exposes only last credential issuance/expiry *timestamps* for diagnostics; no token, envelope, or key values.
+- Go broker tests, QA unit tests, and both signed APK assembly completed successfully on MASTER-PC.
+- End-to-end S25 private VPN login remains an explicit verification checkpoint; do not claim success from credential issuance alone.

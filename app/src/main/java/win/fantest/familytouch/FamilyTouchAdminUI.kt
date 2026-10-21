@@ -1,6 +1,10 @@
 package win.fantest.familytouch
 
 import android.os.Build
+import android.content.Context
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -91,8 +95,20 @@ private object AdminApi {
 @Composable
 internal fun FamilyTouchAdminUI() {
     val s25 = Build.MANUFACTURER.equals("samsung", true) && Build.MODEL == "SM-S938B"
-    var user by remember { mutableStateOf("") }
-    var pass by remember { mutableStateOf("") }
+    val context = LocalContext.current
+    // S25-only encrypted storage; the key is managed by Android Keystore.
+    // Nothing is persisted until the server has actually authenticated the user.
+    val securePrefs = remember {
+        runCatching {
+            val key = MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+            EncryptedSharedPreferences.create(context, "admin_saved_login", key,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM)
+        }.getOrNull()
+    }
+    var user by remember { mutableStateOf(securePrefs?.getString("username", "") ?: "") }
+    var pass by remember { mutableStateOf(securePrefs?.getString("password", "") ?: "") }
+    var rememberLogin by remember { mutableStateOf(securePrefs?.contains("password") == true) }
     var loggedIn by remember { mutableStateOf(false) }
     var tab by remember { mutableIntStateOf(3) }
     var busy by remember { mutableStateOf(false) }
@@ -100,6 +116,25 @@ internal fun FamilyTouchAdminUI() {
     var dashboard by remember { mutableStateOf(Dashboard(emptyList(), 0, false)) }
     var pending by remember { mutableStateOf<Pair<DeviceRecord, String>?>(null) }
     val scope = rememberCoroutineScope()
+
+    LaunchedEffect(Unit) {
+        if (rememberLogin && user.isNotEmpty() && pass.isNotEmpty()) {
+            busy = true
+            try {
+                dashboard = AdminApi.load(user, pass)
+                loggedIn = true
+                error = ""
+            } catch (e: Exception) {
+                error = e.message ?: "Unable to restore login"
+                // Stale credentials must not cause repeated automatic login attempts.
+                if (error.contains("Incorrect username")) {
+                    securePrefs?.edit()?.clear()?.apply()
+                    rememberLogin = false
+                    pass = ""
+                }
+            } finally { busy = false }
+        }
+    }
 
     fun reload() {
         busy = true
@@ -111,7 +146,10 @@ internal fun FamilyTouchAdminUI() {
     }
     MaterialTheme(colorScheme = lightColorScheme(
         primary = green, onPrimary = Color.White, background = Color(0xFFF7FAF8),
-        surface = Color.White, onBackground = ink, onSurface = ink
+        surface = Color.White, onBackground = ink, onSurface = ink,
+        secondary = green, secondaryContainer = mint, onSecondaryContainer = ink,
+        surfaceContainerLow = Color.White, surfaceContainer = Color.White,
+        surfaceVariant = Color(0xFFF3F7F4), onSurfaceVariant = muted
     )) {
         Surface(Modifier.fillMaxSize(), color = Color(0xFFF7FAF8)) {
             if (!s25) {
@@ -140,13 +178,26 @@ internal fun FamilyTouchAdminUI() {
                         modifier = Modifier.fillMaxWidth())
                     if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error,
                         modifier = Modifier.padding(top = 12.dp))
-                    Spacer(Modifier.height(18.dp))
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()) {
+                        Checkbox(checked = rememberLogin, onCheckedChange = { rememberLogin = it },
+                            enabled = securePrefs != null)
+                        Text("Remember my login securely on this S25", fontSize = 13.sp)
+                    }
+                    Spacer(Modifier.height(12.dp))
                     Button(
                         onClick = {
                             busy = true
                             scope.launch {
                                 try {
                                     dashboard = AdminApi.load(user, pass)
+                                    if (rememberLogin && securePrefs != null) {
+                                        securePrefs.edit().putString("username", user)
+                                            .putString("password", pass).apply()
+                                    } else {
+                                        securePrefs?.edit()?.clear()?.apply()
+                                    }
                                     error = ""; loggedIn = true
                                 } catch (e: Exception) { error = e.message ?: "Login unavailable" }
                                 finally { busy = false }
@@ -155,7 +206,7 @@ internal fun FamilyTouchAdminUI() {
                         modifier = Modifier.fillMaxWidth().height(50.dp),
                         shape = RoundedCornerShape(20.dp)
                     ) { Text(if (busy) "Verifying…" else "Sign in") }
-                    Text("Sign-in completes only when MASTER-PC authenticates you.",
+                    Text("Saved login is encrypted with Android Keystore. Sign out clears it.",
                         fontSize = 12.sp, color = muted, modifier = Modifier.padding(top = 12.dp))
                 }
             } else {
@@ -169,6 +220,8 @@ internal fun FamilyTouchAdminUI() {
                             Text("MASTER-PC • Secure HTTPS • No VPN", fontSize = 11.sp, color = green)
                         }
                         TextButton(onClick = {
+                            securePrefs?.edit()?.clear()?.apply()
+                            rememberLogin = false
                             user = ""; pass = ""; loggedIn = false; error = ""
                             dashboard = Dashboard(emptyList(), 0, false)
                         }) { Text("Sign out") }
@@ -197,7 +250,9 @@ internal fun FamilyTouchAdminUI() {
                                 Spacer(Modifier.height(10.dp))
                                 LazyColumn(verticalArrangement = Arrangement.spacedBy(9.dp)) {
                                     items(dashboard.devices, key = { it.id }) { device ->
-                                        ElevatedCard(shape = RoundedCornerShape(17.dp)) {
+                                        ElevatedCard(shape = RoundedCornerShape(17.dp),
+                                            colors = CardDefaults.elevatedCardColors(containerColor = Color.White),
+                                            elevation = CardDefaults.elevatedCardElevation(defaultElevation = 1.dp)) {
                                             Column(Modifier.fillMaxWidth().padding(14.dp)) {
                                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                                     Box(Modifier.size(42.dp).background(mint, CircleShape),
@@ -259,7 +314,11 @@ internal fun FamilyTouchAdminUI() {
                             Triple("Admin", Icons.Outlined.Security, 3)
                         ).forEach { (label, icon, index) ->
                             NavigationBarItem(selected = tab == index, onClick = { tab = index },
-                                icon = { Icon(icon, label) }, label = { Text(label) })
+                                icon = { Icon(icon, label) }, label = { Text(label) },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = green, selectedTextColor = green,
+                                    indicatorColor = mint, unselectedIconColor = muted,
+                                    unselectedTextColor = muted))
                         }
                     }
                 }
