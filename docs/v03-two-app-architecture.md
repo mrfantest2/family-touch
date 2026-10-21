@@ -1,7 +1,7 @@
 # Family Touch v0.3 — two-app architecture and visual redesign
 
 ## Approved product requirements
-Family Touch is the family-facing app, built-in VPN only. No separate Tailscale installation or external VPN mode in the shipping variant. Family Touch Admin is a **different Android package** for the authorized Samsung Galaxy S25; it must leave Android's VPN slot free and use normal Android DNS/internet plus an HTTPS connection to AgentBox. The Admin product must eventually offer the same chats, calls and contacts as Family Touch, plus administrator management.
+Family Touch is the family-facing app, built-in VPN only. No separate Tailscale installation or external VPN mode in the shipping variant. Family Touch Admin is a **different Android package** for the authorized Samsung Galaxy S25; it must leave Android's VPN slot free and use normal Android DNS/internet plus an HTTPS connection to MASTER-PC. The Admin product must eventually offer the same chats, calls and contacts as Family Touch, plus administrator management.
 
 ## Visual specification (approved mockups)
 Use a WhatsApp-inspired interaction model without copying WhatsApp branding: light neutral background `#F7FAF8`, white surfaces `#FFFFFF`, emerald primary `#008F56`, dark green-neutral text `#142722`, muted text `#667670`, soft mint `#E4F6EB`, circular avatars, compact rounded rows, accessible typography, consistent floating actions and a persistent navigation bar.
@@ -14,14 +14,14 @@ Use a WhatsApp-inspired interaction model without copying WhatsApp branding: lig
 - [x] Feature branch `feature/family-touch-v03-dual-apps` created from v16.
 - [x] Family build migrates prior external-mode choice to built-in and removes mode-selection UI.
 - [x] Family visual palette migrated to light emerald. Full screen-by-screen polish still pending.
-- [x] Separate `admin` build target/package with a native Android login shell and current authenticated management dashboard over HTTPS, no VPN service.
+- [x] Separate `admin` build target/package with fully native Compose login and device management through authenticated MASTER-PC HTTPS APIs, no VPN service.
 - [ ] Admin *server-side* S25 device binding using Android Keystore hardware-backed key plus server enrollment / revocation. A client-side model check is only provisional and is **not a security boundary**.
-- [ ] Replace the temporary admin Basic-auth WebView integration with authenticated, device-bound native API sessions and CSRF-protected management actions; do not persist passwords.
+- [x] Remove Admin WebView and expose authenticated native device listing and approve/revoke/delete APIs; passwords are memory-only; writes require explicit confirmation.\r\n- [ ] Move from Basic auth to short-lived, server device-bound sessions and hardware enrollment before production.
 - [ ] Admin chats / calls / contacts through an authenticated, encrypted HTTPS messaging and WebRTC signaling relay that bridges to approved private peers. No direct 100.x tailnet route or use of Android VPN APIs from Admin. For media calls, provide secure relay/TURN and proper consent, fail closed if unavailable.
 - [ ] Roles, server-verified user accounts and permissions, audit retention policy and admin actions.
 - [ ] Test foreground/background listener recovery and calls with offline/reconnecting peers.
 - [ ] UI screenshots and accessibility tests on S25 and OP7; audit contact, chat, voice and video flows.
-- [ ] Deploy family build to OP7 for QA, Admin build only to S25 **after** server-bound device authorization is validated. No production rollout or downgrade in place before end-to-end test.
+- [x] Deploy Family Touch v0.3 built-in to OP7 (signed APK, installed with versionCode 17).\r\n- [ ] Deploy both signed APKs to S25 after Android installer confirmation; verify native Admin and preserve existing VPN.\r\n- [ ] No Play release or security production claim until hardware binding, full end-to-end calls and relay pass.
 
 ## Networking and privacy
 A DNS resolver only resolves hostnames; it does not connect the Admin phone to Tailscale private addresses. Therefore the Admin app uses `https://family-admin.fantest.win/admin` for existing management, and a **separately authenticated HTTPS relay** is required before chats/calls can become functional. The family APK uses its embedded VPN engine and existing private broker; use no reusable auth tokens in source control. Android normal DNS settings should not be overwritten.
