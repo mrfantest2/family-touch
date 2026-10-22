@@ -86,7 +86,7 @@ private object AdminApi {
 
     suspend fun update(user: String, pass: String, device: DeviceRecord, operation: String) =
         withContext(Dispatchers.IO) {
-            require(operation in setOf("approve", "revoke", "delete"))
+            require(operation in setOf("approve", "revoke", "delete", "reauthorize"))
             val payload = JSONObject().put("id", device.id).put("action", operation).toString()
             if (!send(user, pass, "/device", payload).optBoolean("ok")) throw IOException("Update failed")
         }
@@ -273,6 +273,9 @@ internal fun FamilyTouchAdminUI() {
                                                     if (!device.approved) OutlinedButton(onClick = {
                                                         pending = device to "approve"
                                                     }, enabled = !busy) { Text("Approve") }
+                                                    if (device.approved && !device.revoked) OutlinedButton(onClick = {
+                                                        pending = device to "reauthorize"
+                                                    }, enabled = !busy) { Text("Retry VPN") }
                                                     if (!device.revoked) OutlinedButton(onClick = {
                                                         pending = device to "revoke"
                                                     }, enabled = !busy) { Text("Revoke") }
@@ -330,6 +333,7 @@ internal fun FamilyTouchAdminUI() {
                 text = { Text(when (action) {
                     "delete" -> "Remove this registration? Re-enrollment will be required. This cannot be undone."
                     "revoke" -> "Revoke this device's access to future private credentials?"
+                    "reauthorize" -> "Invalidate this device's previous short-lived VPN credential and allow a new one on its next signed registration attempt? The device must remain approved."
                     else -> "Approve this device for family access?"
                 }) },
                 confirmButton = {

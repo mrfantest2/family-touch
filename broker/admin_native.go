@@ -80,7 +80,7 @@ func (b *Broker) adminNative(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&request) != nil || len(request.ID) != 64 ||
-		(request.Action != "approve" && request.Action != "revoke" && request.Action != "delete") {
+		(request.Action != "approve" && request.Action != "revoke" && request.Action != "delete" && request.Action != "reauthorize") {
 		http.Error(w, `{"error":"invalid action"}`, http.StatusBadRequest)
 		return
 	}
@@ -90,6 +90,16 @@ func (b *Broker) adminNative(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch request.Action {
+	case "reauthorize":
+		// Reissue a short-lived credential on the device's next signed enroll.
+		// This NEVER approves a revoked registration or changes its public key.
+		if !d.Approved || d.Revoked {
+			http.Error(w, "device is not approved", http.StatusConflict)
+			return
+		}
+		d.Envelope = ""
+		d.EnvelopeExpires = 0
+		d.LastIssue = 0
 	case "approve":
 		approved, _, revoked := b.capacity()
 		if !d.Approved && (approved >= maxDevices || (!d.Revoked && approved+revoked >= maxRevoked)) {

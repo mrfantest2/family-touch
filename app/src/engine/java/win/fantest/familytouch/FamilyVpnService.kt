@@ -122,10 +122,11 @@ class FamilyVpnService : VpnService(), libtailscale.IPNService {
                         ensureActive()
                     }
                     val displayedLabel = if (needsAuth &&
-                        registrationLabel == "Registering this device" &&
-                        authenticationStartedAt > 0L &&
-                        System.currentTimeMillis() - authenticationStartedAt > 90000L)
-                        "Private sign-in delayed — retrying automatically"
+                        registrationLabel == "Registering this device")
+                        if (authenticationStartedAt > 0L &&
+                            System.currentTimeMillis() - authenticationStartedAt > 90000L)
+                            "VPN authorization incomplete — retrying automatically"
+                        else "Credential received — connecting private VPN"
                     else registrationLabel
                     val next = if (needsAuth) VpnConnectionStatus(displayedLabel) else VpnConnectionStatus.fromBackend(backend,
                         EmbeddedTailnet.tunnelActive, nodeIp, Tailnet.vpnIp(this@FamilyVpnService),
