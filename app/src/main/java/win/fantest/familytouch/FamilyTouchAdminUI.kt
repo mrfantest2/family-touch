@@ -2,10 +2,8 @@ package win.fantest.familytouch
 
 import android.os.Build
 import android.content.Context
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -19,13 +17,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import okhttp3.Credentials
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.MediaType.Companion.toMediaType
@@ -40,106 +37,49 @@ private val ink = Color(0xFF142722)
 private val muted = Color(0xFF667670)
 private const val HOST = "https://family-admin.fantest.win/admin/api/v1"
 
-private data class DeviceRecord(
+internal data class DeviceRecord(
     val id: String, val name: String, val model: String,
     val approved: Boolean, val revoked: Boolean
 )
-private data class Dashboard(
+internal data class Dashboard(
     val devices: List<DeviceRecord>, val deleted: Int, val auto: Boolean
 )
-
-private object AdminApi {
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
-        .followRedirects(false).build()
-
-    private fun send(user: String, password: String, endpoint: String, body: String? = null): JSONObject {
-        val builder = Request.Builder().url(HOST + endpoint)
-            .header("Authorization", Credentials.basic(user, password))
-            .header("X-Requested-With", "FamilyTouchNative")
-            .header("Accept", "application/json")
-            .header("Cache-Control", "no-store")
-        if (body == null) builder.get() else
-            builder.post(body.toRequestBody("application/json; charset=utf-8".toMediaType()))
-        client.newCall(builder.build()).execute().use { response ->
-            if (response.code == 401) throw IOException("Incorrect username or password")
-            if (response.code == 403) throw IOException("Administrator access denied")
-            if (!response.isSuccessful) throw IOException("Server error (HTTP " + response.code + ")")
-            return JSONObject(response.body?.string()?.take(65536) ?: throw IOException("Empty reply"))
-        }
-    }
-
-    suspend fun load(user: String, pass: String): Dashboard = withContext(Dispatchers.IO) {
-        val response = send(user, pass, "/devices")
-        val arr = response.optJSONArray("devices") ?: throw IOException("No device data")
-        val devices = buildList {
-            for (i in 0 until arr.length()) {
-                val item = arr.getJSONObject(i)
-                add(DeviceRecord(item.getString("id"), item.optString("name", "Unknown"),
-                    item.optString("model", ""), item.optBoolean("approved"), item.optBoolean("revoked")))
-            }
-        }
-        Dashboard(devices, response.optJSONArray("deleted")?.length() ?: 0,
-            response.optBoolean("autoApprove"))
-    }
-
-    suspend fun update(user: String, pass: String, device: DeviceRecord, operation: String) =
-        withContext(Dispatchers.IO) {
-            require(operation in setOf("approve", "revoke", "delete", "reauthorize"))
-            val payload = JSONObject().put("id", device.id).put("action", operation).toString()
-            if (!send(user, pass, "/device", payload).optBoolean("ok")) throw IOException("Update failed")
-        }
-}
 
 @Composable
 internal fun FamilyTouchAdminUI() {
     val s25 = Build.MANUFACTURER.equals("samsung", true) && Build.MODEL == "SM-S938B"
-    val context = LocalContext.current
-    // S25-only encrypted storage; the key is managed by Android Keystore.
-    // Nothing is persisted until the server has actually authenticated the user.
-    val securePrefs = remember {
-        runCatching {
-            val key = MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
-            EncryptedSharedPreferences.create(context, "admin_saved_login", key,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM)
-        }.getOrNull()
-    }
-    var user by remember { mutableStateOf(securePrefs?.getString("username", "") ?: "") }
-    var pass by remember { mutableStateOf(securePrefs?.getString("password", "") ?: "") }
-    var rememberLogin by remember { mutableStateOf(securePrefs?.contains("password") == true) }
     var loggedIn by remember { mutableStateOf(false) }
     var tab by remember { mutableIntStateOf(3) }
+    var section by remember { mutableIntStateOf(0) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
+    var fingerprint by remember { mutableStateOf("") }
     var dashboard by remember { mutableStateOf(Dashboard(emptyList(), 0, false)) }
     var pending by remember { mutableStateOf<Pair<DeviceRecord, String>?>(null) }
+    var selectedContact by remember { mutableStateOf<DeviceRecord?>(null) }
     val scope = rememberCoroutineScope()
-
     LaunchedEffect(Unit) {
-        if (rememberLogin && user.isNotEmpty() && pass.isNotEmpty()) {
+        while (!loggedIn && s25) {
             busy = true
             try {
-                dashboard = AdminApi.load(user, pass)
-                loggedIn = true
-                error = ""
-            } catch (e: Exception) {
-                error = e.message ?: "Unable to restore login"
-                // Stale credentials must not cause repeated automatic login attempts.
-                if (error.contains("Incorrect username")) {
-                    securePrefs?.edit()?.clear()?.apply()
-                    rememberLogin = false
-                    pass = ""
+                fingerprint = DeviceAdminApi.fingerprint()
+                if (DeviceAdminApi.register()) {
+                    dashboard = DeviceAdminApi.load()
+                    loggedIn = true
+                    error = ""
+                } else {
+                    error = ""
                 }
+            } catch (e: Exception) {
+                error = e.message ?: "Connection unavailable"
             } finally { busy = false }
+            if (!loggedIn) delay(15000)
         }
     }
-
     fun reload() {
         busy = true
         scope.launch {
-            try { dashboard = AdminApi.load(user, pass); error = "" }
+            try { dashboard = DeviceAdminApi.load(); error = "" }
             catch (e: Exception) { error = e.message ?: "Server unavailable" }
             finally { busy = false }
         }
@@ -159,72 +99,49 @@ internal fun FamilyTouchAdminUI() {
                     Text("Server-enforced hardware authorization is still pending.", color = muted)
                 }
             } else if (!loggedIn) {
-                Column(Modifier.fillMaxSize().padding(26.dp), verticalArrangement = Arrangement.Center,
+                Column(Modifier.fillMaxSize().statusBarsPadding().padding(26.dp),
+                    verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Outlined.Security, null, Modifier.size(75.dp), tint = green)
+                    Icon(Icons.Outlined.Security, null, Modifier.size(72.dp), tint = green)
                     Spacer(Modifier.height(18.dp))
-                    Text("Family Touch Admin", fontSize = 27.sp, fontWeight = FontWeight.Bold)
-                    Text("Secure family management", color = muted)
-                    Spacer(Modifier.height(18.dp))
-                    Surface(color = mint, shape = RoundedCornerShape(15.dp)) {
-                        Text("Native Android  •  HTTPS  •  No VPN", Modifier.padding(13.dp), color = green)
-                    }
-                    Spacer(Modifier.height(22.dp))
-                    OutlinedTextField(user, { user = it.take(80) }, label = { Text("Username") },
-                        singleLine = true, modifier = Modifier.fillMaxWidth())
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedTextField(pass, { pass = it.take(160) }, label = { Text("Password") },
-                        singleLine = true, visualTransformation = PasswordVisualTransformation(),
-                        modifier = Modifier.fillMaxWidth())
-                    if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(top = 12.dp))
+                    Text("Secure S25 access", fontSize = 25.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth()) {
-                        Checkbox(checked = rememberLogin, onCheckedChange = { rememberLogin = it },
-                            enabled = securePrefs != null)
-                        Text("Remember my login securely on this S25", fontSize = 13.sp)
+                    Text("Family Touch Admin opens automatically after one-time MASTER-PC device authorization.",
+                        color = muted, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    Spacer(Modifier.height(17.dp))
+                    Surface(color = mint, shape = RoundedCornerShape(15.dp)) {
+                        Column(Modifier.padding(14.dp), horizontalAlignment=Alignment.CenterHorizontally) {
+                            Text("Device fingerprint", color=green, fontSize=12.sp)
+                            Text(fingerprint.take(16), color=green, fontWeight=FontWeight.Bold)
+                            Text("No username or password required", color=green, fontSize=12.sp)
+                        }
                     }
-                    Spacer(Modifier.height(12.dp))
-                    Button(
-                        onClick = {
-                            busy = true
-                            scope.launch {
-                                try {
-                                    dashboard = AdminApi.load(user, pass)
-                                    if (rememberLogin && securePrefs != null) {
-                                        securePrefs.edit().putString("username", user)
-                                            .putString("password", pass).apply()
-                                    } else {
-                                        securePrefs?.edit()?.clear()?.apply()
-                                    }
-                                    error = ""; loggedIn = true
-                                } catch (e: Exception) { error = e.message ?: "Login unavailable" }
-                                finally { busy = false }
-                            }
-                        }, enabled = !busy && user.isNotBlank() && pass.isNotBlank(),
-                        modifier = Modifier.fillMaxWidth().height(50.dp),
-                        shape = RoundedCornerShape(20.dp)
-                    ) { Text(if (busy) "Verifying…" else "Sign in") }
-                    Text("Saved login is encrypted with Android Keystore. Sign out clears it.",
-                        fontSize = 12.sp, color = muted, modifier = Modifier.padding(top = 12.dp))
+                    if(busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top=15.dp))
+                    if(error.isNotBlank()) Text(error, color=MaterialTheme.colorScheme.error,
+                        modifier=Modifier.padding(top=13.dp))
+                    Text("Checking access automatically every 15 seconds",
+                        fontSize=12.sp, color=muted, modifier=Modifier.padding(top=14.dp))
                 }
             } else {
-                Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-                    Row(Modifier.fillMaxWidth().background(Color.White).padding(15.dp),
-                        verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Outlined.Security, null, tint = green)
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text("Family Touch Admin", fontWeight = FontWeight.Bold, fontSize = 19.sp)
-                            Text("MASTER-PC • Secure HTTPS • No VPN", fontSize = 11.sp, color = green)
+                Column(Modifier.fillMaxSize().navigationBarsPadding()) {
+                    Surface(color=Color.White,shadowElevation=2.dp) {
+                        Column(Modifier.fillMaxWidth().background(Color.White).statusBarsPadding()) {
+                            Row(Modifier.fillMaxWidth().height(67.dp).padding(horizontal=16.dp),
+                                verticalAlignment=Alignment.CenterVertically) {
+                                Box(Modifier.size(43.dp).background(mint,CircleShape),
+                                    contentAlignment=Alignment.Center) {
+                                    Icon(Icons.Outlined.Security, null, tint=green)
+                                }
+                                Spacer(Modifier.width(12.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text("Family Touch", fontWeight=FontWeight.Bold, fontSize=20.sp)
+                                    Text("ADMIN  •  S25  •  Private HTTPS", color=green, fontSize=11.sp)
+                                }
+                                IconButton(onClick={ reload() },enabled=!busy) {
+                                    Icon(Icons.Outlined.Refresh,contentDescription="Refresh",tint=green)
+                                }
+                            }
                         }
-                        TextButton(onClick = {
-                            securePrefs?.edit()?.clear()?.apply()
-                            rememberLogin = false
-                            user = ""; pass = ""; loggedIn = false; error = ""
-                            dashboard = Dashboard(emptyList(), 0, false)
-                        }) { Text("Sign out") }
                     }
                     if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                     Box(Modifier.weight(1f)) {
@@ -232,10 +149,20 @@ internal fun FamilyTouchAdminUI() {
                             3 -> Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
                                 Row(Modifier.fillMaxWidth().padding(vertical = 12.dp),
                                     verticalAlignment = Alignment.CenterVertically) {
-                                    Text("Devices & approvals", fontSize = 22.sp,
+                                    Text("Family management", fontSize = 22.sp,
                                         fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                                     TextButton(onClick = { reload() }, enabled = !busy) { Text("Refresh") }
                                 }
+                                Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                                    FilterChip(selected=section==0,onClick={section=0},
+                                        label={Text("Users")})
+                                    FilterChip(selected=section==1,onClick={section=1},
+                                        label={Text("Devices")})
+                                }
+                                Text(if(section==0) "Family users & approvals"
+                                    else "Registered devices & connection recovery",
+                                    color=muted,fontSize=12.sp)
+
                                 Surface(color = mint, shape = RoundedCornerShape(14.dp),
                                     modifier = Modifier.fillMaxWidth()) {
                                     Text(
@@ -263,7 +190,9 @@ internal fun FamilyTouchAdminUI() {
                                                     Spacer(Modifier.width(11.dp))
                                                     Column(Modifier.weight(1f)) {
                                                         Text(device.name, fontWeight = FontWeight.Bold)
-                                                        Text(device.model, fontSize = 12.sp, color = muted)
+                                                        Text(if(section==0) "Family user · " + device.model
+                                                            else "Device model · " + device.model,
+                                                            fontSize = 12.sp, color = muted)
                                                     }
                                                     Text(if (device.revoked) "Revoked" else
                                                         if (device.approved) "Approved" else "Pending",
@@ -287,14 +216,41 @@ internal fun FamilyTouchAdminUI() {
                                     }
                                 }
                             }
-                            2 -> Column(Modifier.fillMaxSize().padding(20.dp)) {
-                                Text("Family contacts", fontWeight = FontWeight.Bold, fontSize = 23.sp)
-                                Text("Registered family devices", color = muted)
-                                dashboard.devices.forEach { device ->
-                                    Text(device.name + " • " +
-                                        if (device.approved) "Approved" else "Not approved",
-                                        Modifier.padding(vertical = 12.dp))
-                                    HorizontalDivider()
+                            2 -> Column(Modifier.fillMaxSize()) {
+                                Row(Modifier.fillMaxWidth().padding(horizontal=16.dp,vertical=12.dp),
+                                    verticalAlignment=Alignment.CenterVertically) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text("Registered family devices",fontWeight=FontWeight.Bold)
+                                        Text("Your approved family circle", color=muted,fontSize=12.sp)
+                                    }
+                                    OutlinedButton(onClick={reload()},enabled=!busy) { Text("Refresh") }
+                                }
+                                val contacts=dashboard.devices.filter{it.approved && !it.revoked}
+                                if(contacts.isEmpty()) {
+                                    Text("Approved family contacts will appear here.",
+                                        Modifier.padding(22.dp),color=muted)
+                                } else LazyColumn {
+                                    items(contacts,key={it.id}) { device ->
+                                        Row(Modifier.fillMaxWidth().clickable{selectedContact=device}
+                                            .padding(horizontal=19.dp,vertical=15.dp),
+                                            verticalAlignment=Alignment.CenterVertically) {
+                                            Box(Modifier.size(48.dp).background(mint,CircleShape),
+                                                contentAlignment=Alignment.Center) {
+                                                Text(device.name.take(1).uppercase(),color=green,
+                                                    fontWeight=FontWeight.Bold,fontSize=21.sp)
+                                            }
+                                            Spacer(Modifier.width(14.dp))
+                                            Column(Modifier.weight(1f)) {
+                                                Text(device.name,fontWeight=FontWeight.SemiBold,
+                                                    fontSize=16.sp)
+                                                Text("Approved · "+device.model,color=muted,
+                                                    fontSize=13.sp)
+                                            }
+                                            Icon(Icons.Outlined.ChevronRight,null,tint=muted)
+                                        }
+                                        HorizontalDivider(color=Color(0xFFE5ECE7),
+                                            thickness=0.5.dp)
+                                    }
                                 }
                             }
                             else -> Column(Modifier.fillMaxSize().padding(26.dp),
@@ -327,6 +283,13 @@ internal fun FamilyTouchAdminUI() {
                 }
             }
         }
+        selectedContact?.let { contact ->
+            AlertDialog(onDismissRequest={selectedContact=null},
+                title={Text(contact.name)},
+                text={Text("Registered family member · "+contact.model+
+                    "\nVPN-free chats/calls are not available in Admin yet.")},
+                confirmButton={TextButton(onClick={selectedContact=null}){Text("Close")}})
+        }
         pending?.let { (device, action) ->
             AlertDialog(onDismissRequest = { pending = null },
                 title = { Text(action.replaceFirstChar { it.uppercase() } + " " + device.name + "?") },
@@ -341,8 +304,8 @@ internal fun FamilyTouchAdminUI() {
                         pending = null; busy = true
                         scope.launch {
                             try {
-                                AdminApi.update(user, pass, device, action)
-                                dashboard = AdminApi.load(user, pass)
+                                DeviceAdminApi.update(device, action)
+                                dashboard = DeviceAdminApi.load()
                                 error = ""
                             } catch (e: Exception) { error = e.message ?: "Action failed" }
                             finally { busy = false }
