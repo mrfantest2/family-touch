@@ -2,6 +2,7 @@ package win.fantest.familytouch
 
 import android.content.Context
 import android.os.Build
+import android.net.ConnectivityManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
@@ -36,19 +37,20 @@ internal object FamilyDirectory {
         .readTimeout(20, TimeUnit.SECONDS)
         .followRedirects(false)
         .build()
-    private fun request(path: String, json: JSONObject): JSONObject {
+    private fun request(context: Context, path: String, json: JSONObject): JSONObject {
         // Connect privately once either VPN mode is online. Public registration
         // is retained for first-time built-in VPN provisioning (before login).
-        val endpoints = if (EmbeddedTailnet.status.connected)
-            listOf(privateEndpoint, publicEndpoint) else listOf(publicEndpoint)
+        // MASTER-PC replaced offline AgentBox. Every family device uses the
+        // verified Cloudflare HTTPS API; never wait for the stale AgentBox tailnet IP.
+        val endpoints = listOf(publicEndpoint)
         var failure: java.io.IOException? = null
         for (base in endpoints) {
-            try { return requestAt(base, path, json) }
+            try { return requestAt(context, base, path, json) }
             catch (e: java.io.IOException) { failure = e }
         }
         throw failure ?: java.io.IOException("Family registration unavailable")
     }
-    private fun requestAt(base: String, path: String, json: JSONObject): JSONObject {
+    private fun requestAt(context: Context, base: String, path: String, json: JSONObject): JSONObject {
         val bytes = json.toString().toByteArray(Charsets.UTF_8)
         val device = FamilyIdentity.fingerprint()
         val time = (System.currentTimeMillis() / 1000).toString()
@@ -84,7 +86,14 @@ internal object FamilyDirectory {
                 return JSONObject(String(data, Charsets.UTF_8))
             }
         }
-        val connection = URL(base + path).openConnection() as HttpsURLConnection
+        // Enrollment must travel over the physical underlay. This app is its own
+        // per-app VPN client; default URL.openConnection() may route the HTTPS
+        // bootstrap request *into the not-yet-authenticated VPN* and deadlock.
+        // Network.openConnection keeps normal TLS hostname/certificate checks.
+        val connectivity = context.getSystemService(ConnectivityManager::class.java)
+        val physical = selectedPhysicalNetwork(connectivity)
+            ?: throw java.io.IOException("No physical internet network for enrollment")
+        val connection = physical.openConnection(URL(base + path)) as HttpsURLConnection
         try {
             connection.requestMethod = "POST"
             connection.instanceFollowRedirects = false
@@ -129,7 +138,7 @@ internal object FamilyDirectory {
         val rsa = DeviceProvisioning(context)
         val rsaRequest = JSONObject(rsa.request())
         val prefs = context.getSharedPreferences("directory", Context.MODE_PRIVATE)
-        val result = request("/api/v1/enroll", JSONObject()
+        val result = request(context, "/api/v1/enroll", JSONObject()
             .put("publicKey", FamilyIdentity.publicKey()).put("rsaPublicKey", rsaRequest.getString("publicKey"))
             .put("rsaDeviceId", rsa.deviceId()).put("profileId", FamilyStore.deviceId)
             .put("name", FamilyStore.nickname.take(36)).put("model", Build.MODEL.take(80))
@@ -194,7 +203,7 @@ internal object FamilyDirectory {
             return@withContext
         }
         val ip = EmbeddedTailnet.status.address ?: return@withContext
-        val result = request("/api/v1/sync", JSONObject().put("name", FamilyStore.nickname.take(36))
+        val result = request(context, "/api/v1/sync", JSONObject().put("name", FamilyStore.nickname.take(36))
             .put("profileId", FamilyStore.deviceId).put("ip", ip))
         require(result.getString("state") == "ready")
         val array = result.getJSONArray("peers")

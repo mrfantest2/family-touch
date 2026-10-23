@@ -32,7 +32,6 @@ internal fun VpnSettings() {
     var active by remember { mutableStateOf(EmbeddedTailnet.serviceActive) }
     var stopping by remember { mutableStateOf(EmbeddedTailnet.stopping) }
     var notice by remember { mutableStateOf("") }
-    var mode by remember { mutableStateOf(FamilyNetworkMode.selected(context)) }
     fun start() {
         try {
             EmbeddedTailnet.status = VpnConnectionStatus("Connecting")
@@ -46,8 +45,7 @@ internal fun VpnSettings() {
     val consent = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         if (it.resultCode == Activity.RESULT_OK) start() else notice = "VPN permission was declined"
     }
-    LaunchedEffect(mode) {
-        if (mode != ConnectionMode.BUILT_IN) return@LaunchedEffect
+    LaunchedEffect(Unit) {
         val preferences = context.getSharedPreferences("vpn", Context.MODE_PRIVATE)
         if (!preferences.getBoolean("initialConsentRequested", false)) {
             preferences.edit().putBoolean("initialConsentRequested", true).apply()
@@ -66,31 +64,12 @@ internal fun VpnSettings() {
     Text("Family network", style = MaterialTheme.typography.titleLarge)
     val inCall = FamilyStore.activeCall != null || FamilyStore.incomingCall != null ||
         GroupCallController.session != null || GroupCallController.incoming != null
-    for (option in ConnectionMode.entries) {
-        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            RadioButton(selected = mode == option, enabled = !inCall && !stopping, onClick = {
-                try {
-                    if (mode != option) {
-                        FamilyNetworkMode.change(context, option)
-                        mode = option
-                        if (option == ConnectionMode.EXTERNAL && EmbeddedTailnet.serviceActive)
-                            context.startService(Intent(context, FamilyVpnService::class.java).setAction(FamilyVpnService.STOP))
-                    }
-                } catch (e: Exception) { notice = e.message ?: "Cannot change connection mode" }
-            })
-            Text(if (option == ConnectionMode.BUILT_IN) "Built-in VPN (recommended)" else "External Tailscale")
-        }
-    }
+    Text("Built-in private VPN", style = MaterialTheme.typography.titleMedium)
+    Text("Family Touch manages its own private connection. No separate VPN app needed.",
+        style = MaterialTheme.typography.bodySmall)
     Text(status.label, color = if (status.connected) androidx.compose.ui.graphics.Color(0xFF5DDAA7)
         else MaterialTheme.colorScheme.onSurface)
     if (status.connected) Text("Private connection active • ${status.address}")
-    if (mode == ConnectionMode.EXTERNAL) {
-        Button(enabled = !stopping && !active, onClick = {
-            try { FamilyNetworkMode.openExternal(context) }
-            catch (_: Exception) { notice = "Open Tailscale manually, connect to your family network, then return here." }
-        }) { Text(if (FamilyNetworkMode.installed(context)) "Open Tailscale" else "Install Tailscale") }
-        Text("Tailscale manages this connection. Connect it to the same family network, then return here. Your chats and identity stay on this phone.")
-    } else {
     Button(enabled = !stopping, onClick = {
         if (active) {
             EmbeddedTailnet.stopping = true
@@ -102,8 +81,7 @@ internal fun VpnSettings() {
             if (intent != null) consent.launch(intent) else start()
         }
     }) { Text(if (active) "Disconnect" else "Connect") }
-    Text("Android asks for VPN permission once. Connecting replaces another active VPN on this phone.",
+    Text("Android may request VPN permission; only one VPN can run at a time.",
         style = MaterialTheme.typography.bodySmall)
-    }
     if (notice.isNotEmpty()) Text(notice)
 }

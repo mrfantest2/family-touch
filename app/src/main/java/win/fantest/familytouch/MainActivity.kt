@@ -80,11 +80,11 @@ import java.util.UUID
 import java.util.Locale
 import java.io.ByteArrayOutputStream
 
-private val bg = Color(0xFF071424)
-private val surface = Color(0xFF0E2339)
-private val accent = Color(0xFF299AF4)
-private val ink = Color(0xFFE8F3FE)
-private val muted = Color(0xFF9DAFBE)
+private val bg = Color(0xFFF7FAF8)
+private val surface = Color(0xFFFFFFFF)
+private val accent = Color(0xFF008F56)
+private val ink = Color(0xFF142722)
+private val muted = Color(0xFF667670)
 
 class MainActivity : ComponentActivity() {
     override fun onStart() { super.onStart(); FamilyStore.appVisible = true }
@@ -97,6 +97,10 @@ class MainActivity : ComponentActivity() {
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (BuildConfig.ADMIN_APP) {
+            setContent { FamilyTouchAdminUI() }
+            return
+        }
         FamilyStore.init(this)
         GroupStore.init(this)
         Tailnet.init(this)
@@ -110,8 +114,10 @@ class MainActivity : ComponentActivity() {
         catch (ex: Exception) { FamilyStore.lastError = "Service: " + ex.message }
         if (!FamilyStore.needsNicknamePrompt) requestNotificationPermission()
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme(
-                primary = accent, onPrimary = Color.White, background = bg, surface = surface, onBackground = ink, onSurface = ink
+            MaterialTheme(colorScheme = lightColorScheme(
+                primary = accent, onPrimary = Color.White, background = bg, surface = surface, onBackground = ink, onSurface = ink,
+                secondary = accent, secondaryContainer = Color(0xFFDBF3E6),
+                onSecondaryContainer = ink, surfaceContainer = surface, surfaceVariant = Color(0xFFF0F7F2)
             )) { Surface(modifier = Modifier.fillMaxSize(), color = bg, contentColor = ink) { FamilyTouchUI(askCallPermissions = { video ->
                 val permissions = if (video) arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
                     else arrayOf(Manifest.permission.RECORD_AUDIO)
@@ -179,7 +185,7 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
             }
 
         }
-        HorizontalDivider(color = Color(0xFF20364B))
+        HorizontalDivider(color = Color(0xFFE5ECE7))
         if (recordingsLibrary) {
             RecordingLibraryScreen { recordingsLibrary = false }
         } else if (groupCall != null) {
@@ -205,7 +211,7 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
                     else -> SettingsPage(networkStatus, onRecordings = { recordingsLibrary = true })
                 }
             }
-            NavigationBar(containerColor = Color(0xFF0B1B2D)) {
+            NavigationBar(containerColor = surface) {
                 val navItems = listOf(Triple("Chats", Icons.Outlined.ChatBubbleOutline, 0),
                     Triple("Calls", Icons.Outlined.Call, 1),
                     Triple("Contacts", Icons.Outlined.Contacts, 2),
@@ -228,8 +234,7 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
     if (!FamilyStore.needsNicknamePrompt && !networkStatus.connected && incoming == null && active == null && groupCall == null) {
         AlertDialog(onDismissRequest = {}, title = { Text("Turn on your private connection") },
             text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(if (FamilyNetworkMode.selected(context) == ConnectionMode.BUILT_IN) "Family Touch needs VPN permission for private calls and messages. Your family devices will appear automatically."
-                    else "This version needs the standalone Tailscale app connected to your family network. Family Touch does not create or replace a VPN.")
+                Text("Allow the built-in VPN for private family calls and messages. Registered devices appear after connecting.")
                 VpnSettings()
             } }, confirmButton = {})
     }
@@ -272,7 +277,7 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
 @Composable
 private fun SurfaceLogo() {
     Box(Modifier.size(40.dp).background(
-        brush = androidx.compose.ui.graphics.Brush.linearGradient(listOf(accent, Color(0xFF7A3AD0))),
+        brush = androidx.compose.ui.graphics.Brush.linearGradient(listOf(Color(0xFF20C578), accent)),
         shape = RoundedCornerShape(13.dp)), contentAlignment = Alignment.Center) {
         Icon(Icons.Outlined.Person, "Family Touch", tint = Color.White)
     }
@@ -349,7 +354,7 @@ private fun CallsPage(peers: List<Peer>, onCall: (Peer, Boolean) -> Unit) {
                     Icon(Icons.Outlined.Call, "Call again")
                 }
             }
-            HorizontalDivider(color = Color(0xFF152B40), thickness = 0.5.dp)
+            HorizontalDivider(color = Color(0xFFE5ECE7), thickness = 0.5.dp)
         }
     }
 }
@@ -398,7 +403,7 @@ private fun PeerRow(peer: Peer, subtitle: String, onClick: () -> Unit) {
                 maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp)
         }
     }
-    HorizontalDivider(color = Color(0xFF152B40), thickness = 0.5.dp)
+    HorizontalDivider(color = Color(0xFFE5ECE7), thickness = 0.5.dp)
 }
 
 @Composable
@@ -411,12 +416,12 @@ private fun Avatar(name: String, photo: String? = null) {
             }
         } catch (_: Exception) { null }
     }
-    Box(Modifier.size(48.dp).clip(CircleShape).background(Color(0xFF164674)),
+    Box(Modifier.size(48.dp).clip(CircleShape).background(Color(0xFFCEEEDD)),
         contentAlignment = Alignment.Center) {
         if (decoded != null) Image(decoded, "Profile image", Modifier.fillMaxSize(),
             contentScale = ContentScale.Fit)
         else Text(name.take(1).uppercase(), fontWeight = FontWeight.Bold,
-            fontSize = 21.sp, color = Color.White)
+            fontSize = 21.sp, color = Color(0xFF086940))
     }
 }
 

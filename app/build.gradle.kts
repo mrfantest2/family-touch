@@ -12,9 +12,10 @@ android {
         applicationId = "win.fantest.familytouch"
         minSdk = 29
         targetSdk = 36
-        versionCode = 16
-        versionName = "0.2.1-unified02"
+        versionCode = 20
+        versionName = "0.3.3-nativeadmin01"
         buildConfigField("boolean", "EMBEDDED_VPN", "true")
+        buildConfigField("boolean", "ADMIN_APP", "false")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["familyTouchAppLabel"] = "Family Touch"
     }
@@ -47,12 +48,12 @@ android {
             manifestPlaceholders["familyTouchAppLabel"] = "Family Touch"
             matchingFallbacks += listOf("release")
         }
-        create("external") {
+        create("admin") {
             initWith(getByName("release"))
-            applicationIdSuffix = ".external"
-            versionNameSuffix = "-external"
-            buildConfigField("boolean", "EMBEDDED_VPN", "false")
-            manifestPlaceholders["familyTouchAppLabel"] = "Family Touch External"
+            applicationIdSuffix = ".admin"
+            versionNameSuffix = "-admin"
+            buildConfigField("boolean", "ADMIN_APP", "true")
+            manifestPlaceholders["familyTouchAppLabel"] = "Family Touch Admin"
             matchingFallbacks += listOf("release")
         }
     }
@@ -62,6 +63,9 @@ android {
                 java.srcDir("src/engine/java")
                 manifest.srcFile("src/engine/AndroidManifest.xml")
             }
+        }
+        getByName("admin") {
+            java.srcDir("src/engine/java")
         }
     }
     compileOptions {
@@ -74,7 +78,7 @@ android {
 }
 
 dependencies {
-    listOf("debug", "release", "qa", "embedded").forEach { variant ->
+    listOf("debug", "release", "qa", "embedded", "admin").forEach { variant ->
         add("${variant}Implementation", files("libs/libtailscale.aar"))
     }
     implementation("androidx.security:security-crypto:1.1.0")

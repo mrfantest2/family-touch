@@ -58,6 +58,7 @@ type KeyProvider interface {
 type IPProber interface {
 	Verify(context.Context, string, string, *ecdsa.PublicKey) error
 }
+
 // Private Tailnet Serve requests carry the authenticated WireGuard source IP.
 // Only the isolated tailnet-only listener in main.go may set this context key.
 type verifiedTailnetSourceKey struct{}
@@ -77,8 +78,8 @@ type Device struct {
 	CreatedAt       int64
 }
 type DeletedRecord struct {
-	Name string
-	Model string
+	Name      string
+	Model     string
 	DeletedAt int64
 }
 type Config struct {
@@ -604,6 +605,10 @@ func (b *Broker) admin(w http.ResponseWriter, r *http.Request) {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if strings.HasPrefix(r.URL.Path, "/admin/api/v1/") {
+		b.adminNative(w, r)
+		return
+	}
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 	if r.Method == "GET" && r.URL.Path == "/admin" {
 		type row struct {
@@ -616,9 +621,9 @@ func (b *Broker) admin(w http.ResponseWriter, r *http.Request) {
 		}
 		sort.Slice(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
 		_ = adminTemplate.Execute(w, struct {
-			CSRF string
-			Auto bool
-			Rows []row
+			CSRF    string
+			Auto    bool
+			Rows    []row
 			Deleted []DeletedRecord
 		}{b.csrf, b.config.AutoApprove, rows, b.deleted})
 		return
