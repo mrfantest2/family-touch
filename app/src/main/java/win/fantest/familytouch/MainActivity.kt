@@ -56,6 +56,7 @@ import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import kotlinx.coroutines.delay
@@ -395,11 +396,32 @@ private fun durationText(ms: Long): String {
     return "%02d:%02d:%02d".format(seconds / 3600L, (seconds / 60L) % 60L, seconds % 60L)
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ContactsPage(peers: List<Peer>, onOpen: (String) -> Unit, onConnectionSettings: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val connected = EmbeddedTailnet.status.connected
+    var refreshing by remember { mutableStateOf(false) }
+    fun doRefresh() {
+        if (refreshing) return
+        if (!connected) {
+            onConnectionSettings()
+            return
+        }
+        refreshing = true
+        scope.launch {
+            try {
+                FamilyDirectory.refresh(context)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                FamilyStore.lastError = "Contacts refresh failed: " + (e.message ?: "connection unavailable")
+            } finally {
+                refreshing = false
+            }
+        }
+    }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically) {
@@ -409,15 +431,30 @@ private fun ContactsPage(peers: List<Peer>, onOpen: (String) -> Unit, onConnecti
                     "Private network disconnected - connect before discovery", color = muted, fontSize = 12.sp)
             }
             Spacer(Modifier.width(8.dp))
-            OutlinedButton(onClick = {
-                if (connected) scope.launch { FamilyDirectory.refresh(context) }
-                else onConnectionSettings()
-            }) { Text(if (connected) "Refresh" else "Connect") }
+            OutlinedButton(onClick = { doRefresh() }, enabled = !refreshing) {
+                Text(if (refreshing) "Refreshing…" else if (connected) "Refresh" else "Connect")
+            }
         }
-        if (peers.isEmpty()) EmptyState("Private family circle", "Registered family devices appear automatically after connecting.")
-        else LazyColumn {
-            items(peers, key = { it.id }) { peer ->
-                PeerRow(peer, peer.ip, onClick = { onOpen(peer.id) })
+        PullToRefreshBox(
+            isRefreshing = refreshing,
+            onRefresh = { doRefresh() },
+            modifier = Modifier.weight(1f).fillMaxWidth()
+        ) {
+            LazyColumn(Modifier.fillMaxSize()) {
+                if (peers.isEmpty()) item {
+                    Column(
+                        Modifier.fillMaxWidth().padding(top = 92.dp, start = 24.dp, end = 24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(Icons.Outlined.Contacts, null, Modifier.size(52.dp), tint = accent)
+                        Text("Private family circle", fontWeight = FontWeight.Bold, fontSize = 19.sp)
+                        Text("Pull down to refresh or connect to discover registered family devices.",
+                            color = muted, fontSize = 13.sp)
+                    }
+                }
+                items(peers, key = { it.id }) { peer ->
+                    PeerRow(peer, peer.ip, onClick = { onOpen(peer.id) })
+                }
             }
         }
     }
@@ -619,23 +656,26 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
             verticalArrangement = Arrangement.spacedBy(10.dp)) {
             items(history, key = { it.id }) { msg ->
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = if (msg.outgoing) Arrangement.End else Arrangement.Start) {
+                    val textColor = if (msg.outgoing) Color.White else ink
+                    val secondaryColor = if (msg.outgoing) Color(0xFFBFDBEF) else muted
+                    val actionColor = if (msg.outgoing) Color(0xFFACE1FF) else accent
                     Column(Modifier.widthIn(max = 300.dp).pointerInput(msg.id) { detectTapGestures(onLongPress = { actionMessage = msg }) }
                         .background(if (msg.outgoing) Color(0xFF1268AE) else surface,
                         RoundedCornerShape(16.dp)).padding(horizontal = 15.dp, vertical = 11.dp)) {
                         val attachment = AttachmentTransport.parse(msg.text)
-                        if (group != null && !msg.outgoing) Text(FamilyStore.find(msg.senderId)?.name ?: "Family member", fontSize = 11.sp)
+                        if (group != null && !msg.outgoing) Text(FamilyStore.find(msg.senderId)?.name ?: "Family member", fontSize = 11.sp, color = secondaryColor)
                         if (attachment != null) {
                             Text((if (attachment.mime.startsWith("image/")) "Photo" else if (attachment.mime.startsWith("audio/")) "Voice / audio" else "Video") +
-                                " · " + attachment.name, color = Color.White, maxLines = 2)
+                                " · " + attachment.name, color = textColor, maxLines = 2)
                             Text(((attachment.size + 1023) / 1024).toString() + " KB",
-                                fontSize = 11.sp, color = Color(0xFFBFDBEF))
-                            Text("Tap to open attachment", color = Color(0xFFACE1FF),
+                                fontSize = 11.sp, color = secondaryColor)
+                            Text("Tap to open attachment", color = actionColor,
                                 modifier = Modifier.clickable {
                                     viewedMedia = attachment
                                 })
                         } else if (msg.text.startsWith("Location: https://www.google.com/maps?q=")) {
-                            Text("Shared location", color = Color.White)
-                            Text("Open in Maps", color = Color(0xFFACE1FF),
+                            Text("Shared location", color = textColor)
+                            Text("Open in Maps", color = actionColor,
                                 modifier = Modifier.clickable {
                                     try {
                                         context.startActivity(Intent(Intent.ACTION_VIEW,
@@ -644,14 +684,14 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
                                         FamilyStore.lastError = "No maps app or browser available"
                                     }
                                 })
-                        } else Text(msg.text, color = Color.White)
+                        } else Text(msg.text, color = textColor)
                         val reactions = MessageReactions.summary(msg.id)
-                        if (reactions.isNotBlank()) Text(reactions, color = Color.White)
+                        if (reactions.isNotBlank()) Text(reactions, color = textColor)
                         Text(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(msg.time)),
-                            color = Color(0xFFBFDBEF), fontSize = 10.sp)
+                            color = secondaryColor, fontSize = 10.sp)
                         if (msg.outgoing) Text(if (group != null) (if (msg.delivered) "Delivered" else GroupStore.delivery(msg.id) ?: "Queued")
                             else MessageDelivery.label(msg.sent, msg.delivered, msg.read),
-                            color = Color(0xFFBFDBEF), fontSize = 10.sp)
+                            color = secondaryColor, fontSize = 10.sp)
                     }
                 }
             }
@@ -660,7 +700,7 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
             Text("Replying to: " + (AttachmentTransport.parse(item.text)?.name ?: item.text).take(140), Modifier.weight(1f), maxLines = 2)
             TextButton(onClick = { replyTo = null }) { Text("Cancel") }
         } }
-        Row(Modifier.fillMaxWidth().background(Color(0xFF0D2135)).padding(10.dp),
+        Row(Modifier.fillMaxWidth().background(Color.White).padding(horizontal = 8.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = {
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
@@ -678,7 +718,19 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
                 Icon(Icons.Outlined.LocationOn, "Share one-time location", tint = accent)
             }
             OutlinedTextField(value = draft, onValueChange = { draft = it.take(6000) },
-                modifier = Modifier.weight(1f), placeholder = { Text("Message") },
+                modifier = Modifier.weight(1f),
+                placeholder = { Text("Message", color = muted) },
+                textStyle = androidx.compose.ui.text.TextStyle(color = ink, fontSize = 16.sp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = ink, unfocusedTextColor = ink,
+                    focusedContainerColor = Color.White, unfocusedContainerColor = Color.White,
+                    cursorColor = accent, focusedBorderColor = accent,
+                    unfocusedBorderColor = Color(0xFFB6CFC3),
+                    focusedPlaceholderColor = muted, unfocusedPlaceholderColor = muted,
+                    selectionColors = androidx.compose.foundation.text.selection.TextSelectionColors(
+                        handleColor = accent, backgroundColor = Color(0xFFB8E7D0)
+                    )
+                ),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(onSend = { }),
                 shape = RoundedCornerShape(24.dp), maxLines = 5)
