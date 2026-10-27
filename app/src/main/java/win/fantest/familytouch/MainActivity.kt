@@ -11,6 +11,7 @@ import android.graphics.ImageDecoder
 import android.graphics.Bitmap
 import android.util.Base64
 import androidx.compose.foundation.Image
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import android.location.LocationManager
@@ -108,6 +109,14 @@ class MainActivity : ComponentActivity() {
             setContent { FamilyTouchAdminUI() }
             return
         }
+        // Standard app: light/white header uses dark Android system icons.
+        // Admin's separate branch above retains its existing system-bar behavior.
+        window.statusBarColor = android.graphics.Color.WHITE
+        window.navigationBarColor = android.graphics.Color.WHITE
+        androidx.core.view.WindowInsetsControllerCompat(window, window.decorView).apply {
+            isAppearanceLightStatusBars = true
+            isAppearanceLightNavigationBars = true
+        }
         FamilyStore.init(this)
         GroupStore.init(this)
         Tailnet.init(this)
@@ -176,9 +185,13 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
         networkStatus = EmbeddedTailnet.status
         delay(500)
     } }
-    Column(Modifier.fillMaxSize().background(bg).statusBarsPadding().navigationBarsPadding()) {
-        Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 18.dp, bottom = 14.dp),
-            verticalAlignment = Alignment.CenterVertically) {
+    Column(Modifier.fillMaxSize().background(bg).navigationBarsPadding()) {
+        // Own the status bar inset inside the white top app bar. Android 15+
+        // draws behind the system bar, so a window flag alone is insufficient.
+        Surface(color = Color.White, shadowElevation = 1.dp) {
+            Row(Modifier.fillMaxWidth().statusBarsPadding()
+                .padding(start = 18.dp, end = 16.dp, top = 11.dp, bottom = 11.dp),
+                verticalAlignment = Alignment.CenterVertically) {
             if (selectedPeer != null && active == null) IconButton(onClick = { FamilyStore.selectedPeer = null }) {
                 Icon(Icons.Outlined.ArrowBack, "Back")
             } else {
@@ -186,13 +199,23 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
                 Spacer(Modifier.width(11.dp))
             }
             Column(Modifier.weight(1f)) {
-                Text(selectedPeer?.name ?: "Family Touch", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                Text(networkStatus.label,
-                    fontSize = 12.sp, color = if (networkStatus.connected) Color(0xFF5DDAA7) else Color(0xFFFFC466))
+                Text(selectedPeer?.name ?: "Family Touch", fontSize = 21.sp,
+                    fontWeight = FontWeight.Bold, color = ink)
+                Text(networkStatus.label, fontSize = 12.sp,
+                    color = if (networkStatus.connected) Color(0xFF067C4D) else Color(0xFF9A6619),
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-
+            if (selectedPeer == null) Surface(
+                color = if (networkStatus.connected) Color(0xFFDEF5E8) else Color(0xFFFFF4E1),
+                shape = RoundedCornerShape(50.dp)) {
+                Text(if (networkStatus.connected) "Secure" else "Offline",
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    color = if (networkStatus.connected) Color(0xFF08794B) else Color(0xFF9A6619),
+                    fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+            }
+            }
         }
-        HorizontalDivider(color = Color(0xFFE5ECE7))
+        HorizontalDivider(color = Color(0xFFE5ECE7), thickness = 0.5.dp)
         if (recordingsLibrary) {
             RecordingLibraryScreen { recordingsLibrary = false }
         } else if (groupCall != null) {
@@ -218,14 +241,18 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
                     else -> SettingsPage(networkStatus, onRecordings = { recordingsLibrary = true })
                 }
             }
-            NavigationBar(containerColor = surface) {
+            NavigationBar(containerColor = surface, tonalElevation = 0.dp) {
                 val navItems = listOf(Triple("Chats", Icons.Outlined.ChatBubbleOutline, 0),
                     Triple("Calls", Icons.Outlined.Call, 1),
                     Triple("Contacts", Icons.Outlined.Contacts, 2),
                     Triple("Settings", Icons.Outlined.Settings, 3))
                 navItems.forEach { (label, icon, idx) ->
                     NavigationBarItem(selected = tab == idx, onClick = { tab = idx; FamilyStore.selectedPeer = null },
-                        icon = { Icon(icon, label) }, label = { Text(label, fontSize = 11.sp) })
+                        icon = { Icon(icon, label) }, label = { Text(label, fontSize = 11.sp) },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = accent, selectedTextColor = accent,
+                            indicatorColor = Color(0xFFDEF3E8),
+                            unselectedIconColor = muted, unselectedTextColor = muted))
                 }
             }
         }
@@ -283,11 +310,8 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
 
 @Composable
 private fun SurfaceLogo() {
-    Box(Modifier.size(40.dp).background(
-        brush = androidx.compose.ui.graphics.Brush.linearGradient(listOf(Color(0xFF20C578), accent)),
-        shape = RoundedCornerShape(13.dp)), contentAlignment = Alignment.Center) {
-        Icon(Icons.Outlined.Person, "Family Touch", tint = Color.White)
-    }
+    Image(painter = painterResource(R.drawable.ic_family_touch),
+        contentDescription = "Family Touch", modifier = Modifier.size(44.dp))
 }
 
 @Composable
