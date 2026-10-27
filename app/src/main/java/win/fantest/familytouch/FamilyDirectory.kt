@@ -142,8 +142,12 @@ internal object FamilyDirectory {
             .put("publicKey", FamilyIdentity.publicKey()).put("rsaPublicKey", rsaRequest.getString("publicKey"))
             .put("rsaDeviceId", rsa.deviceId()).put("profileId", FamilyStore.deviceId)
             .put("name", FamilyStore.nickname.take(36)).put("model", Build.MODEL.take(80))
+            // Auth keys are single-use. If the backend still NeedsLogin after a
+            // start attempt, acknowledge the last envelope by hash so the broker
+            // can rotate the consumed key after its minimum issuance interval.
+            // Never send the key, private device identity or plaintext credential.
             .put("needsAuth", needsAuth).put("previousEnvelopeHash",
-                if (needsAuth) "" else prefs.getString("envelopeHash", "")))
+                prefs.getString("envelopeHash", "") ?: ""))
         return when (result.getString("state")) {
             "pending" -> "Waiting for family approval"
             "credential" -> {
@@ -156,8 +160,11 @@ internal object FamilyDirectory {
                 if (needsAuth || hash != prefs.getString("envelopeHash", "")) {
                     val key = rsa.decrypt(envelope.toByteArray(Charsets.UTF_8))
                     stage = "start private network"
-                    EmbeddedTailnet.api(context, "POST", "start", JSONObject().put("AuthKey", key))
+                    // Persist only this non-secret envelope digest before start:
+                    // even if localapi consumes a one-time key and then throws,
+                    // the next signed attempt must not loop on the same key.
                     prefs.edit().putString("envelopeHash", hash).apply()
+                    EmbeddedTailnet.api(context, "POST", "start", JSONObject().put("AuthKey", key))
                 }
                 "Registering this device"
             }

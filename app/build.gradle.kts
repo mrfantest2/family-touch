@@ -12,8 +12,8 @@ android {
         applicationId = "win.fantest.familytouch"
         minSdk = 29
         targetSdk = 36
-        versionCode = 20
-        versionName = "0.3.3-nativeadmin01"
+        versionCode = 21
+        versionName = "0.3.4-keyrotate01"
         buildConfigField("boolean", "EMBEDDED_VPN", "true")
         buildConfigField("boolean", "ADMIN_APP", "false")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
