@@ -98,6 +98,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (BuildConfig.ADMIN_APP) {
+            // Native Admin uses a white top bar; ensure Android system icons remain visible.
+            window.statusBarColor = android.graphics.Color.WHITE
+            window.navigationBarColor = android.graphics.Color.WHITE
+            androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
+                .isAppearanceLightStatusBars = true
+            androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
+                .isAppearanceLightNavigationBars = true
             setContent { FamilyTouchAdminUI() }
             return
         }
