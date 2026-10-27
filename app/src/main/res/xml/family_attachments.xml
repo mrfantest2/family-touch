@@ -3,4 +3,5 @@
     <files-path name="attachments" path="attachments/" />
     <files-path name="recordings" path="recordings/" />
     <cache-path name="voice_notes" path="voice-notes/" />
+    <cache-path name="updates" path="updates/" />
 </paths>

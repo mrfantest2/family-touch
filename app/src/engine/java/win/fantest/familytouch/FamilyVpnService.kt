@@ -83,7 +83,9 @@ class FamilyVpnService : VpnService(), libtailscale.IPNService {
                 ensureActive()
                 var nextEnrollment = 0L
                 var registered = false
-                var registrationLabel = "Registering this device"
+                var registrationLabel = "Contacting family server"
+                var authenticationStartedAt = 0L
+                var previousBackend = ""
                 while (isActive) {
                     val status = EmbeddedTailnet.api(this@FamilyVpnService, "GET", "status")
                     ensureActive()
@@ -92,6 +94,15 @@ class FamilyVpnService : VpnService(), libtailscale.IPNService {
                         .firstOrNull { Tailnet.isTailIp(it) }
                     val backend = status.optString("BackendState")
                     val needsAuth = backend == "NeedsLogin" || backend == "NoState"
+                    if (backend != previousBackend) {
+                        // Log only a bounded status enum, never auth keys or URLs.
+                        android.util.Log.i("FamilyVpnEnrollment", "Private backend state: " +
+                            backend.take(24) + ", hasIP=" + (nodeIp != null))
+                        previousBackend = backend
+                    }
+                    if (needsAuth && authenticationStartedAt == 0L)
+                        authenticationStartedAt = System.currentTimeMillis()
+                    if (!needsAuth) authenticationStartedAt = 0L
                     if ((!registered || needsAuth) && System.currentTimeMillis() >= nextEnrollment) {
                         nextEnrollment = System.currentTimeMillis() + 30000
                         registrationLabel = try {
@@ -110,7 +121,14 @@ class FamilyVpnService : VpnService(), libtailscale.IPNService {
                         }
                         ensureActive()
                     }
-                    val next = if (needsAuth) VpnConnectionStatus(registrationLabel) else VpnConnectionStatus.fromBackend(backend,
+                    val displayedLabel = if (needsAuth &&
+                        registrationLabel == "Registering this device")
+                        if (authenticationStartedAt > 0L &&
+                            System.currentTimeMillis() - authenticationStartedAt > 90000L)
+                            "VPN authorization incomplete — retrying automatically"
+                        else "Credential received — connecting private VPN"
+                    else registrationLabel
+                    val next = if (needsAuth) VpnConnectionStatus(displayedLabel) else VpnConnectionStatus.fromBackend(backend,
                         EmbeddedTailnet.tunnelActive, nodeIp, Tailnet.vpnIp(this@FamilyVpnService),
                         selectedPhysicalNetwork(cm)?.let { cm.getNetworkCapabilities(it)
                             ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) } == true)
