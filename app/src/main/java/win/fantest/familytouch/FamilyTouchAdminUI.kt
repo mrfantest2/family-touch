@@ -137,6 +137,9 @@ internal fun FamilyTouchAdminUI() {
                                     Text("Family Touch", fontWeight=FontWeight.Bold, fontSize=20.sp)
                                     Text("ADMIN  •  S25  •  Private HTTPS", color=green, fontSize=11.sp)
                                 }
+                                IconButton(onClick={ FamilyUpdates.checkNow() }) {
+                                    Icon(Icons.Outlined.SystemUpdate,contentDescription="Check updates",tint=green)
+                                }
                                 IconButton(onClick={ reload() },enabled=!busy) {
                                     Icon(Icons.Outlined.Refresh,contentDescription="Refresh",tint=green)
                                 }

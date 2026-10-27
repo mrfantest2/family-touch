@@ -107,7 +107,7 @@ class MainActivity : ComponentActivity() {
                 .isAppearanceLightStatusBars = true
             androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
                 .isAppearanceLightNavigationBars = true
-            setContent { FamilyTouchAdminUI() }
+            setContent { Box { FamilyTouchAdminUI(); FamilyUpdatePrompt() } }
             return
         }
         // Standard app: light/white header uses dark Android system icons.
@@ -135,15 +135,15 @@ class MainActivity : ComponentActivity() {
                 primary = accent, onPrimary = Color.White, background = bg, surface = surface, onBackground = ink, onSurface = ink,
                 secondary = accent, secondaryContainer = Color(0xFFDBF3E6),
                 onSecondaryContainer = ink, surfaceContainer = surface, surfaceVariant = Color(0xFFF0F7F2)
-            )) { Surface(modifier = Modifier.fillMaxSize(), color = bg, contentColor = ink) { FamilyTouchUI(askCallPermissions = { video ->
+            )) { Surface(modifier = Modifier.fillMaxSize(), color = bg, contentColor = ink) { Box { FamilyTouchUI(askCallPermissions = { video ->
                 val permissions = if (video) arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
                     else arrayOf(Manifest.permission.RECORD_AUDIO)
-                val missing = permissions.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+                val missing = permissions.filter { ContextCompat.checkSelfPermission(this@MainActivity, it) != PackageManager.PERMISSION_GRANTED }
                 if (missing.isNotEmpty()) {
                     askPermissions.launch(missing.toTypedArray())
                     false
                 } else true
-            }, onNicknameFinished = { requestNotificationPermission() }) } }
+            }, onNicknameFinished = { requestNotificationPermission() }); FamilyUpdatePrompt() } } }
         }
     }
 }
@@ -233,7 +233,7 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
         } else {
             Box(Modifier.weight(1f)) {
                 when (tab) {
-                    0 -> ChatsPage(contacts, onOpen = { FamilyStore.selectedPeer = it; tab = 0 })
+                    0 -> ChatsPage(contacts, onOpen = { FamilyStore.markChatViewed(it); FamilyStore.selectedPeer = it; tab = 0 })
                     1 -> CallsPage(contacts) { peer, video ->
                         if (askCallPermissions(video)) CallController.start(peer, video)
                     }
@@ -249,7 +249,13 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
                     Triple("Settings", Icons.Outlined.Settings, 3))
                 navItems.forEach { (label, icon, idx) ->
                     NavigationBarItem(selected = tab == idx, onClick = { tab = idx; FamilyStore.selectedPeer = null },
-                        icon = { Icon(icon, label) }, label = { Text(label, fontSize = 11.sp) },
+                        icon = {
+                            if (idx == 0 && FamilyStore.unreadTotal() > 0) {
+                                BadgedBox(badge = {
+                                    Badge { Text(FamilyStore.unreadTotal().coerceAtMost(99).toString()) }
+                                }) { Icon(icon, label) }
+                            } else Icon(icon, label)
+                        }, label = { Text(label, fontSize = 11.sp) },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = accent, selectedTextColor = accent,
                             indicatorColor = Color(0xFFDEF3E8),
@@ -315,19 +321,46 @@ private fun SurfaceLogo() {
         contentDescription = "Family Touch", modifier = Modifier.size(44.dp))
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ChatsPage(peers: List<Peer>, onOpen: (String) -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var refreshing by remember { mutableStateOf(false) }
     var newGroup by remember { mutableStateOf(false) }
-    if (newGroup) GroupEditor(onDismiss = { newGroup = false }, onSaved = { newGroup = false; onOpen(it.id) })
-    if (peers.isEmpty() && GroupStore.groups.isEmpty()) EmptyState("Welcome to Family Touch", "Your family devices appear automatically after connecting.")
-    else LazyColumn(contentPadding = PaddingValues(vertical = 8.dp)) {
-        item { TextButton(onClick = { newGroup = true }, modifier = Modifier.padding(horizontal = 12.dp)) { Text("Create group") } }
-        items(GroupStore.groups.toList(), key = { it.id }) { group ->
-            PeerRow(Peer(group.id, group.title, "", ""), "Group · ${group.members.size} devices", onClick = { onOpen(group.id) })
+    fun refresh() {
+        if (refreshing) return
+        refreshing = true
+        scope.launch {
+            try {
+                if (EmbeddedTailnet.status.connected) FamilyDirectory.refresh(context)
+                else FamilyStore.updateDirectoryStatus("Connect private network to refresh chats")
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { FamilyStore.lastError = "Chat refresh: " + (e.message ?: "Network unavailable") }
+            finally { refreshing = false }
         }
-        items(peers, key = { it.id }) { peer ->
-            val message = FamilyStore.messages.lastOrNull { it.peerId == peer.id }
-            PeerRow(peer, message?.text ?: "Start a conversation", onClick = { onOpen(peer.id) })
+    }
+    if (newGroup) GroupEditor(onDismiss = { newGroup = false }, onSaved = { newGroup = false; onOpen(it.id) })
+    PullToRefreshBox(isRefreshing = refreshing, onRefresh = { refresh() }, modifier = Modifier.fillMaxSize()) {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 8.dp)) {
+            item { TextButton(onClick = { newGroup = true }, modifier = Modifier.padding(horizontal = 12.dp)) { Text("Create group") } }
+            if (peers.isEmpty() && GroupStore.groups.isEmpty()) item {
+                Column(Modifier.fillMaxWidth().padding(top = 85.dp, start = 30.dp, end = 30.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Welcome to Family Touch",fontWeight=FontWeight.Bold,fontSize=20.sp)
+                    Text("Pull down to refresh conversations.",color=muted)
+                }
+            }
+            items(GroupStore.groups.toList(), key = { it.id }) { group ->
+                PeerRow(Peer(group.id, group.title, "", ""),
+                    "Group · " + group.members.size + " devices",
+                    onClick = { onOpen(group.id) }, unread = FamilyStore.unreadFor(group.id))
+            }
+            items(peers, key = { it.id }) { peer ->
+                val message = FamilyStore.messages.lastOrNull { it.peerId == peer.id }
+                PeerRow(peer, message?.text ?: "Start a conversation",
+                    onClick = { onOpen(peer.id) }, unread = FamilyStore.unreadFor(peer.id))
+            }
         }
     }
 }
@@ -461,14 +494,30 @@ private fun ContactsPage(peers: List<Peer>, onOpen: (String) -> Unit, onConnecti
 }
 
 @Composable
-private fun PeerRow(peer: Peer, subtitle: String, onClick: () -> Unit) {
+private fun PeerRow(peer: Peer, subtitle: String, onClick: () -> Unit, unread: Int = 0) {
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 19.dp, vertical = 15.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Avatar(peer.name, FamilyStore.peerPhotos[peer.id]); Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(peer.name, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
-            Text(FamilyStore.presenceLabel(peer.id) + " · " + subtitle, color = muted,
-                maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                val state = FamilyStore.peerPresence[peer.id]
+                val presenceColor = when (state) {
+                    "available" -> Color(0xFF12835A)
+                    "on_call" -> Color(0xFF287CC7)
+                    "away" -> Color(0xFFD39A27)
+                    else -> Color(0xFF98A4A0)
+                }
+                Box(Modifier.size(8.dp).background(presenceColor, CircleShape))
+                Spacer(Modifier.width(6.dp))
+                Text(FamilyStore.presenceLabel(peer.id) + " · " + subtitle, color = muted,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp)
+            }
+        }
+        if (unread > 0) {
+            Badge(containerColor = accent) {
+                Text(if (unread > 99) "99+" else unread.toString(), color = Color.White)
+            }
         }
     }
     HorizontalDivider(color = Color(0xFFE5ECE7), thickness = 0.5.dp)
@@ -803,6 +852,7 @@ private fun SettingsPage(networkStatus: VpnConnectionStatus, onRecordings: () ->
         HorizontalDivider(color = Color(0xFF24415C))
         VpnSettings()
         OutlinedButton(onClick = onRecordings) { Text("Local call recordings") }
+        OutlinedButton(onClick = { FamilyUpdates.checkNow() }) { Text("Check for updates") }
         HorizontalDivider(color = Color(0xFF24415C))
         Text("Family devices appear automatically after connecting. Messages stay on your devices.", color = muted, fontSize = 13.sp)
     }
