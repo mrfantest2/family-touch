@@ -13,10 +13,11 @@ internal object DirectorySecurity {
     fun validateRoster(peers: List<Peer>, self: String): List<Peer> {
         require(peers.size <= 64)
         require(peers.map { it.id }.distinct().size == peers.size)
-        require(peers.map { it.ip }.distinct().size == peers.size)
+        if (!BuildConfig.PUBLIC_RELAY) require(peers.map { it.ip }.distinct().size == peers.size)
         peers.forEach {
             require(it.id != self && it.id.matches(Regex("[A-Za-z0-9-]{20,80}")))
-            require(it.name.isNotBlank() && it.name.length <= 36 && isPrivateIp(it.ip))
+            require(it.name.isNotBlank() && it.name.length <= 36 &&
+                (if (BuildConfig.PUBLIC_RELAY) it.ip == "relay" else isPrivateIp(it.ip)))
             require(validChallenge(it.secret))
         }
         return peers

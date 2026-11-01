@@ -123,7 +123,7 @@ class MainActivity : ComponentActivity() {
         Tailnet.init(this)
         PeerOutbox.init(this)
         MessageReactions.init(this)
-        resumeFamilyNetwork(this)
+        if (!BuildConfig.PUBLIC_RELAY) resumeFamilyNetwork(this)
         CallController.init(this)
         GroupCallController.init(this)
         CallRecordingEngine.init(this)
@@ -175,7 +175,7 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
     }
     if (confirmBack) AlertDialog(onDismissRequest = { confirmBack = false },
         title = { Text(if (active != null) "Keep this call running?" else "Leave Family Touch?") },
-        text = { Text("You can keep Family Touch open or minimize it without disconnecting your private connection.") },
+        text = { Text(if (BuildConfig.PUBLIC_RELAY) "You can minimize Family Touch. Messages synchronize over HTTPS." else "You can keep Family Touch open or minimize it without disconnecting your private connection.") },
         confirmButton = { TextButton(onClick = {
             confirmBack = false
             (context as? android.app.Activity)?.moveTaskToBack(true)
@@ -202,16 +202,16 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
             Column(Modifier.weight(1f)) {
                 Text(selectedPeer?.name ?: "Family Touch", fontSize = 21.sp,
                     fontWeight = FontWeight.Bold, color = ink)
-                Text(networkStatus.label, fontSize = 12.sp,
-                    color = if (networkStatus.connected) Color(0xFF067C4D) else Color(0xFF9A6619),
+                Text(if (BuildConfig.PUBLIC_RELAY) FamilyStore.directoryStatus else networkStatus.label, fontSize = 12.sp,
+                    color = if (BuildConfig.PUBLIC_RELAY || networkStatus.connected) Color(0xFF067C4D) else Color(0xFF9A6619),
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             if (selectedPeer == null) Surface(
-                color = if (networkStatus.connected) Color(0xFFDEF5E8) else Color(0xFFFFF4E1),
+                color = if (BuildConfig.PUBLIC_RELAY || networkStatus.connected) Color(0xFFDEF5E8) else Color(0xFFFFF4E1),
                 shape = RoundedCornerShape(50.dp)) {
-                Text(if (networkStatus.connected) "Secure" else "Offline",
+                Text(if (BuildConfig.PUBLIC_RELAY) "HTTPS" else if (networkStatus.connected) "Secure" else "Offline",
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                    color = if (networkStatus.connected) Color(0xFF08794B) else Color(0xFF9A6619),
+                    color = if (BuildConfig.PUBLIC_RELAY || networkStatus.connected) Color(0xFF08794B) else Color(0xFF9A6619),
                     fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
             }
             }
@@ -225,7 +225,8 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
             CallPage(active, onHangup = { CallController.hangup() })
         } else if (selectedPeer != null && tab == 0) {
             Conversation(peer = selectedPeer, onCall = { video ->
-                if (askCallPermissions(video)) try {
+                if (BuildConfig.PUBLIC_RELAY) FamilyStore.lastError = "Voice and video calls are not available in the public HTTPS preview."
+                else if (askCallPermissions(video)) try {
                     val group = GroupStore.find(selectedPeer.id)
                     if (group != null) GroupCallController.start(group, video) else CallController.start(selectedPeer, video)
                 } catch (e: Exception) { FamilyStore.lastError = e.message ?: "Cannot start call" }
@@ -235,7 +236,8 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
                 when (tab) {
                     0 -> ChatsPage(contacts, onOpen = { FamilyStore.markChatViewed(it); FamilyStore.selectedPeer = it; tab = 0 })
                     1 -> CallsPage(contacts) { peer, video ->
-                        if (askCallPermissions(video)) CallController.start(peer, video)
+                        if (BuildConfig.PUBLIC_RELAY) FamilyStore.lastError = "Calls require the secure media relay, which is not ready."
+                        else if (askCallPermissions(video)) CallController.start(peer, video)
                     }
                     2 -> ContactsPage(contacts, onOpen = { FamilyStore.selectedPeer = it; tab = 0 },
                         onConnectionSettings = { tab = 3 })
@@ -272,11 +274,11 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
         }) { Text("Join") } }, dismissButton = {
             TextButton(onClick = { GroupCallController.hangup() }) { Text("Decline") }
         })
-    if (!FamilyStore.needsNicknamePrompt && !networkStatus.connected && incoming == null && active == null && groupCall == null) {
+    if (!BuildConfig.PUBLIC_RELAY && !FamilyStore.needsNicknamePrompt && !networkStatus.connected && incoming == null && active == null && groupCall == null) {
         AlertDialog(onDismissRequest = {}, title = { Text("Turn on your private connection") },
             text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("Allow the built-in VPN for private family calls and messages. Registered devices appear after connecting.")
-                VpnSettings()
+                if (BuildConfig.PUBLIC_RELAY) Text("Public HTTPS preview. No VPN required. Messages only.") else VpnSettings()
             } }, confirmButton = {})
     }
     if (FamilyStore.needsNicknamePrompt && incoming == null && active == null) {
@@ -333,7 +335,7 @@ private fun ChatsPage(peers: List<Peer>, onOpen: (String) -> Unit) {
         refreshing = true
         scope.launch {
             try {
-                if (EmbeddedTailnet.status.connected) FamilyDirectory.refresh(context)
+                if (BuildConfig.PUBLIC_RELAY || EmbeddedTailnet.status.connected) FamilyDirectory.refresh(context)
                 else FamilyStore.updateDirectoryStatus("Connect private network to refresh chats")
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: Exception) { FamilyStore.lastError = "Chat refresh: " + (e.message ?: "Network unavailable") }
@@ -343,7 +345,7 @@ private fun ChatsPage(peers: List<Peer>, onOpen: (String) -> Unit) {
     if (newGroup) GroupEditor(onDismiss = { newGroup = false }, onSaved = { newGroup = false; onOpen(it.id) })
     PullToRefreshBox(isRefreshing = refreshing, onRefresh = { refresh() }, modifier = Modifier.fillMaxSize()) {
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 8.dp)) {
-            item { TextButton(onClick = { newGroup = true }, modifier = Modifier.padding(horizontal = 12.dp)) { Text("Create group") } }
+            if (!BuildConfig.PUBLIC_RELAY) item { TextButton(onClick = { newGroup = true }, modifier = Modifier.padding(horizontal = 12.dp)) { Text("Create group") } }
             if (peers.isEmpty() && GroupStore.groups.isEmpty()) item {
                 Column(Modifier.fillMaxWidth().padding(top = 85.dp, start = 30.dp, end = 30.dp),
                     horizontalAlignment = Alignment.CenterHorizontally) {
@@ -434,7 +436,7 @@ private fun durationText(ms: Long): String {
 private fun ContactsPage(peers: List<Peer>, onOpen: (String) -> Unit, onConnectionSettings: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val connected = EmbeddedTailnet.status.connected
+    val connected = BuildConfig.PUBLIC_RELAY || EmbeddedTailnet.status.connected
     var refreshing by remember { mutableStateOf(false) }
     fun doRefresh() {
         if (refreshing) return
@@ -850,7 +852,7 @@ private fun SettingsPage(networkStatus: VpnConnectionStatus, onRecordings: () ->
         Text("Your identity is created automatically when this app is first installed. No account or password required.",
             color = muted, fontSize = 12.sp)
         HorizontalDivider(color = Color(0xFF24415C))
-        VpnSettings()
+        if (BuildConfig.PUBLIC_RELAY) Text("Public HTTPS preview. No VPN required. Messages only.") else VpnSettings()
         OutlinedButton(onClick = onRecordings) { Text("Local call recordings") }
         OutlinedButton(onClick = { FamilyUpdates.checkNow() }) { Text("Check for updates") }
         HorizontalDivider(color = Color(0xFF24415C))

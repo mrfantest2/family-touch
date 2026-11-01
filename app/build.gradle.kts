@@ -15,6 +15,7 @@ android {
         versionCode = 25
         versionName = "0.3.8-autoupdate01"
         buildConfigField("boolean", "EMBEDDED_VPN", "true")
+        buildConfigField("boolean", "PUBLIC_RELAY", "false")
         buildConfigField("boolean", "ADMIN_APP", "false")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["familyTouchAppLabel"] = "Family Touch"
@@ -48,6 +49,15 @@ android {
             manifestPlaceholders["familyTouchAppLabel"] = "Family Touch"
             matchingFallbacks += listOf("release")
         }
+        create("public") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".public"
+            versionNameSuffix = "-public"
+            buildConfigField("boolean", "EMBEDDED_VPN", "false")
+            buildConfigField("boolean", "PUBLIC_RELAY", "true")
+            manifestPlaceholders["familyTouchAppLabel"] = "Family Touch Public Preview"
+            matchingFallbacks += listOf("release")
+        }
         create("admin") {
             initWith(getByName("release"))
             applicationIdSuffix = ".admin"
@@ -67,6 +77,9 @@ android {
         getByName("admin") {
             java.srcDir("src/engine/java")
         }
+        getByName("public") {
+            java.srcDir("src/engine/java")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -78,7 +91,7 @@ android {
 }
 
 dependencies {
-    listOf("debug", "release", "qa", "embedded", "admin").forEach { variant ->
+    listOf("debug", "release", "qa", "embedded", "admin", "public").forEach { variant ->
         add("${variant}Implementation", files("libs/libtailscale.aar"))
     }
     implementation("androidx.security:security-crypto:1.1.0")

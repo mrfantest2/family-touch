@@ -46,6 +46,9 @@ class PeerService : Service() {
         scope.launch {
             while (isActive) {
                 FamilyDirectory.refresh(this@PeerService)
+                if (BuildConfig.PUBLIC_RELAY)
+                    (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(
+                        NotificationIds.CONNECTION, connectionNotification())
                 delay(20000)
             }
         }
@@ -77,6 +80,7 @@ class PeerService : Service() {
         }
         scope.launch {
             while (isActive) {
+                if (BuildConfig.PUBLIC_RELAY) { delay(45_000L); continue }
                 val contacts = FamilyStore.contacts.toList()
                 for (peer in contacts) {
                     FamilyStore.peerPresence[peer.id] = try {
@@ -99,7 +103,21 @@ class PeerService : Service() {
                 delay(300_000L)
             }
         }
-        listenJob = scope.launch {
+        listenJob = if (BuildConfig.PUBLIC_RELAY) scope.launch {
+            while (isActive) {
+                try {
+                    val batch = PublicRelay.pull(this@PeerService)
+                    for (incoming in batch) {
+                        processPublic(incoming)
+                        PublicRelay.acknowledge(incoming.queueId)
+                    }
+                } catch (ex: Exception) {
+                    if (isActive) FamilyStore.lastError = "Public HTTPS sync: " +
+                        (ex.message ?: "temporarily unavailable")
+                }
+                delay(5_000)
+            }
+        } else scope.launch {
             while (isActive) {
                 val address = EmbeddedTailnet.status.takeIf { it.connected }?.address
                 if (address == null) { delay(1000); continue }
@@ -123,12 +141,54 @@ class PeerService : Service() {
         }
     }
 
+    private suspend fun processPublic(message: PublicRelay.Incoming) {
+        val peer = FamilyStore.find(message.from) ?: error("Unknown approved sender")
+        val json = message.payload
+        when (message.type) {
+            "message" -> {
+                val text = json.getString("text")
+                val id = json.getString("messageId")
+                require(text.isNotBlank() && text.length <= 6000)
+                UUID.fromString(id)
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    if (FamilyStore.messages.none { it.id == id }) {
+                        FamilyStore.addChat(ChatItem(id, peer.id, false, text,
+                            System.currentTimeMillis(), true))
+                        showNotification(peer.name, text.take(100), peerId = peer.id)
+                    }
+                }
+                PublicRelay.send(this, peer, "delivery_receipt", JSONObject().put("messageId", id))
+            }
+            "delivery_receipt" -> {
+                val id = json.getString("messageId")
+                UUID.fromString(id)
+                kotlinx.coroutines.withContext(Dispatchers.Main) { FamilyStore.delivered(id) }
+            }
+            "read_receipt" -> {
+                val ids = json.getJSONArray("messageIds")
+                require(ids.length() <= 100)
+                val values = (0 until ids.length()).map { ids.getString(it) }.toSet()
+                kotlinx.coroutines.withContext(Dispatchers.Main) { FamilyStore.markRead(peer.id, values) }
+            }
+            "message_reaction" -> {
+                kotlinx.coroutines.withContext(Dispatchers.Main) { MessageReactions.receive(peer.id, json) }
+            }
+            "profile_update" -> {
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    FamilyStore.setPeerPhoto(peer.id, json.optString("avatar"))
+                }
+            }
+            else -> error("Unsupported HTTPS message")
+        }
+    }
+
     private fun connectionNotification(): Notification {
-        val connected = EmbeddedTailnet.status.connected
+        val connected = if (BuildConfig.PUBLIC_RELAY)
+            FamilyStore.directoryStatus.startsWith("Public HTTPS connected") else EmbeddedTailnet.status.connected
         return NotificationCompat.Builder(this, channel)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
-            .setContentTitle(if (connected) "Family Touch connected" else "Family Touch private connection")
-            .setContentText(if (connected) "Private messages and calls ready" else EmbeddedTailnet.status.label)
+            .setContentTitle(if (connected) "Family Touch connected" else if (BuildConfig.PUBLIC_RELAY) "Family Touch HTTPS" else "Family Touch private connection")
+            .setContentText(if (BuildConfig.PUBLIC_RELAY) "Encrypted text messaging preview; calls unavailable" else if (connected) "Private messages and calls ready" else EmbeddedTailnet.status.label)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setSilent(true)

@@ -17,7 +17,7 @@ object Tailnet {
     const val PORT = 48321
     @Volatile private var appContext: Context? = null
 
-    fun init(context: Context) { appContext = context.applicationContext; EmbeddedTailnet.initialize(context) }
+    fun init(context: Context) { appContext = context.applicationContext; if (!BuildConfig.PUBLIC_RELAY) EmbeddedTailnet.initialize(context) }
 
     /** Read one newline-terminated wire frame with a strict byte bound. */
     internal fun readWireLine(input: InputStream, maxBytes: Int = 131072): String {
@@ -69,6 +69,7 @@ object Tailnet {
     }
 
     suspend fun send(peer: Peer, type: String, payload: JSONObject = JSONObject(), onWritten: (suspend () -> Unit)? = null): JSONObject = withContext(Dispatchers.IO) {
+        if (BuildConfig.PUBLIC_RELAY) return@withContext PublicRelay.send(requireNotNull(appContext), peer, type, payload, onWritten)
         require(isTailIp(peer.ip)) { "private network-only connections" }
         val ctx = requireNotNull(appContext) { "Family Touch networking is not initialized" }
         check(vpnIp(ctx) != null) { "Connect to private network before messaging or calling" }

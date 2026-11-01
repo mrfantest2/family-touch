@@ -50,6 +50,9 @@ internal object FamilyDirectory {
         }
         throw failure ?: java.io.IOException("Family registration unavailable")
     }
+    internal fun postPublic(context: Context, path: String, json: JSONObject): JSONObject =
+        requestAt(context, publicEndpoint, path, json)
+
     private fun requestAt(context: Context, base: String, path: String, json: JSONObject): JSONObject {
         val bytes = json.toString().toByteArray(Charsets.UTF_8)
         val device = FamilyIdentity.fingerprint()
@@ -197,7 +200,7 @@ internal object FamilyDirectory {
         }
     }
     suspend fun sync(context: Context) = withContext(Dispatchers.IO) {
-        if (!EmbeddedTailnet.status.connected) {
+        if (!BuildConfig.PUBLIC_RELAY && !EmbeddedTailnet.status.connected) {
             withContext(Dispatchers.Main) { FamilyStore.updateDirectoryStatus("Private network disconnected - connect to discover devices") }
             return@withContext
         }
@@ -209,9 +212,9 @@ internal object FamilyDirectory {
             withContext(Dispatchers.Main) { FamilyStore.updateDirectoryStatus(enrollment) }
             return@withContext
         }
-        val ip = EmbeddedTailnet.status.address ?: return@withContext
+        val ip = if (BuildConfig.PUBLIC_RELAY) "relay" else (EmbeddedTailnet.status.address ?: return@withContext)
         val result = request(context, "/api/v1/sync", JSONObject().put("name", FamilyStore.nickname.take(36))
-            .put("profileId", FamilyStore.deviceId).put("ip", ip))
+            .put("profileId", FamilyStore.deviceId).put("ip", ip).put("publicRelay", BuildConfig.PUBLIC_RELAY))
         require(result.getString("state") == "ready")
         val array = result.getJSONArray("peers")
         require(array.length() <= 64)
@@ -222,7 +225,7 @@ internal object FamilyDirectory {
         DirectorySecurity.validateRoster(peers, FamilyStore.deviceId)
         withContext(Dispatchers.Main) {
             FamilyStore.applyDirectory(peers)
-            FamilyStore.updateDirectoryStatus("Directory updated - " + peers.size + " other registered device(s)")
+            FamilyStore.updateDirectoryStatus((if (BuildConfig.PUBLIC_RELAY) "Public HTTPS connected - " else "Directory updated - ") + peers.size + " other registered device(s)")
         }
     }
 }
