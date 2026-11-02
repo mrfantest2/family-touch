@@ -2,6 +2,8 @@ package win.fantest.familytouch
 
 import android.content.Context
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -90,26 +92,72 @@ internal fun FamilyPinGate(content:@Composable ()->Unit){
         content();return
     }
     SideEffect { FamilyStore.appVisible = false }
-    Column(Modifier.fillMaxSize().padding(26.dp),horizontalAlignment=Alignment.CenterHorizontally,
-        verticalArrangement=Arrangement.Center) {
-        Text("Family Touch",fontSize=26.sp)
-        Spacer(Modifier.height(10.dp))
-        Text("Enter your six-digit security PIN")
-        Spacer(Modifier.height(15.dp))
-        OutlinedTextField(pin,{pin=it.filter { ch->ch.isDigit() }.take(6)},
-            label={Text("Security PIN")},singleLine=true,
-            keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.NumberPassword),
-            visualTransformation=PasswordVisualTransformation())
-        if(err.isNotBlank())Text(err,color=MaterialTheme.colorScheme.error)
+    Column(Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 22.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center) {
+        Text("Family Touch", fontSize = 27.sp, color = androidx.compose.ui.graphics.Color(0xFFE9EDEF))
+        Spacer(Modifier.height(8.dp))
+        Text("Enter your 6-digit app PIN", color = androidx.compose.ui.graphics.Color(0xFF8696A0))
+        Spacer(Modifier.height(24.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            repeat(6) { index ->
+                Box(Modifier.size(16.dp)
+                    .background(if (index < pin.length)
+                        androidx.compose.ui.graphics.Color(0xFF00A884)
+                        else androidx.compose.ui.graphics.Color.Transparent,
+                        androidx.compose.foundation.shape.CircleShape)
+                    .border(1.5.dp, androidx.compose.ui.graphics.Color(0xFF00A884),
+                        androidx.compose.foundation.shape.CircleShape))
+            }
+        }
+        if (err.isNotBlank()) {
+            Spacer(Modifier.height(11.dp))
+            Text(err, color = androidx.compose.ui.graphics.Color(0xFFFFB4A9), fontSize = 12.sp)
+        }
+        Spacer(Modifier.height(26.dp))
+        val keys = listOf("1","2","3","4","5","6","7","8","9","","0","⌫")
+        keys.chunked(3).forEach { row ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                row.forEach { key ->
+                    if (key.isBlank()) Spacer(Modifier.weight(1f).height(58.dp))
+                    else OutlinedButton(
+                        onClick = {
+                            err = ""
+                            if (key == "⌫") pin = pin.dropLast(1)
+                            else if (pin.length < 6) pin += key
+                        },
+                        modifier = Modifier.weight(1f).height(58.dp),
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = androidx.compose.ui.graphics.Color(0xFFE9EDEF)),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp, androidx.compose.ui.graphics.Color(0xFF43565E)),
+                        contentPadding = PaddingValues(0.dp)
+                    ) { Text(key, fontSize = 23.sp) }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+        }
+        Spacer(Modifier.height(11.dp))
+        Button(enabled = pin.length == 6, modifier = Modifier.fillMaxWidth().height(54.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = androidx.compose.ui.graphics.Color(0xFF00A884),
+                contentColor = androidx.compose.ui.graphics.Color(0xFF0B141A),
+                disabledContainerColor = androidx.compose.ui.graphics.Color(0xFF275748),
+                disabledContentColor = androidx.compose.ui.graphics.Color(0xFFB3CCC2)),
+            onClick = {
+                try {
+                    if (FamilyPin.verify(ctx, pin)) { err = ""; pin = "" }
+                    else {
+                        err = if (FamilyPin.cooldown(ctx) > 0)
+                            "Too many attempts. Try again later." else "Incorrect PIN"
+                        pin = ""
+                    }
+                } catch (_: Exception) { err = "Cannot verify PIN securely"; pin = "" }
+            }) { Text("Unlock", fontSize = 16.sp) }
         Spacer(Modifier.height(12.dp))
-        Button(enabled=pin.length==6,onClick={
-            try {
-                if(FamilyPin.verify(ctx,pin)){err="";pin=""}
-                else{val s=FamilyPin.cooldown(ctx);err=if(s>0)"Too many attempts. Try again later." else "Incorrect PIN";pin=""}
-            }catch(_:Exception){err="Unable to verify the PIN securely.";pin=""}
-        }) {Text("Unlock")}
-        Text("After five incorrect attempts, unlocking is delayed.",fontSize=12.sp,
-            modifier=Modifier.padding(top=15.dp))
+        Text("Five failed attempts trigger a temporary lockout.",
+            fontSize = 11.sp, color = androidx.compose.ui.graphics.Color(0xFF8696A0))
     }
 }
 
