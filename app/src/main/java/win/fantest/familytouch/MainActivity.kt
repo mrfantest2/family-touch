@@ -1260,6 +1260,10 @@ private fun SettingsPage(networkStatus: VpnConnectionStatus, onRecordings: () ->
             color = muted, fontSize = 12.sp)
         ChatBackupPanel()
         OutlinedButton(onClick = onRecordings) { Text("Local call recordings") }
+        Text("App version", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = ink)
+        Text(FamilyVersionLabels.format(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE.toLong()),
+            color = accent, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+        Text("Installed release: " + BuildConfig.VERSION_NAME, color = muted, fontSize = 12.sp)
         Button(onClick = { FamilyUpdates.checkNow() }, colors = ButtonDefaults.buttonColors(
             containerColor = accent, contentColor = bg)) { Text("Check for updates") }
         HorizontalDivider(color = Color(0xFF24415C))
