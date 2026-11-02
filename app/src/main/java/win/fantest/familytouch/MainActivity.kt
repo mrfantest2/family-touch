@@ -67,6 +67,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
@@ -89,10 +91,34 @@ private val ink = Color(0xFF142722)
 private val muted = Color(0xFF667670)
 
 class MainActivity : ComponentActivity() {
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent.getStringExtra("open_peer_id")?.let { id ->
+            if (FamilyStore.find(id) != null || GroupStore.find(id) != null) FamilyStore.selectedPeer = id
+        }
+    }
     override fun onStart() { super.onStart(); FamilyStore.appVisible = true }
     override fun onStop() { FamilyStore.appVisible = false; super.onStop() }
 
     private val askPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {}
+    private var pendingCallAction: (() -> Unit)? = null
+    private val requestCallGrants = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
+        val action = pendingCallAction
+        pendingCallAction = null
+        if (permissions.values.all { it }) action?.invoke()
+        else FamilyStore.lastError = "Allow microphone / camera permission to answer or start the call"
+    }
+    private fun withCallPermissions(video: Boolean, whenGranted: () -> Unit) {
+        val permissions = if (video) arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
+        else arrayOf(Manifest.permission.RECORD_AUDIO)
+        val missing = permissions.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isEmpty()) whenGranted()
+        else {
+            pendingCallAction = whenGranted
+            requestCallGrants.launch(missing.toTypedArray())
+        }
+    }
     private fun requestNotificationPermission() {
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
             askPermissions.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS))
@@ -120,6 +146,9 @@ class MainActivity : ComponentActivity() {
         }
         FamilyStore.init(this)
         GroupStore.init(this)
+        intent.getStringExtra("open_peer_id")?.let { id ->
+            if (FamilyStore.find(id) != null || GroupStore.find(id) != null) FamilyStore.selectedPeer = id
+        }
         Tailnet.init(this)
         PeerOutbox.init(this)
         MessageReactions.init(this)
@@ -135,21 +164,15 @@ class MainActivity : ComponentActivity() {
                 primary = accent, onPrimary = Color.White, background = bg, surface = surface, onBackground = ink, onSurface = ink,
                 secondary = accent, secondaryContainer = Color(0xFFDBF3E6),
                 onSecondaryContainer = ink, surfaceContainer = surface, surfaceVariant = Color(0xFFF0F7F2)
-            )) { Surface(modifier = Modifier.fillMaxSize(), color = bg, contentColor = ink) { Box { FamilyTouchUI(askCallPermissions = { video ->
-                val permissions = if (video) arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
-                    else arrayOf(Manifest.permission.RECORD_AUDIO)
-                val missing = permissions.filter { ContextCompat.checkSelfPermission(this@MainActivity, it) != PackageManager.PERMISSION_GRANTED }
-                if (missing.isNotEmpty()) {
-                    askPermissions.launch(missing.toTypedArray())
-                    false
-                } else true
+            )) { Surface(modifier = Modifier.fillMaxSize(), color = bg, contentColor = ink) { Box { FamilyTouchUI(requestCallPermissions = { video, callback ->
+                withCallPermissions(video, callback)
             }, onNicknameFinished = { requestNotificationPermission() }); FamilyUpdatePrompt() } } }
         }
     }
 }
 
 @Composable
-private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFinished: () -> Unit) {
+private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit, onNicknameFinished: () -> Unit) {
     var tab by remember { mutableIntStateOf(0) }
     var recordingsLibrary by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -226,10 +249,12 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
         } else if (selectedPeer != null && tab == 0) {
             Conversation(peer = selectedPeer, onCall = { video ->
                 if (BuildConfig.PUBLIC_RELAY) FamilyStore.lastError = "Voice and video calls are not available in the public HTTPS preview."
-                else if (askCallPermissions(video)) try {
-                    val group = GroupStore.find(selectedPeer.id)
-                    if (group != null) GroupCallController.start(group, video) else CallController.start(selectedPeer, video)
-                } catch (e: Exception) { FamilyStore.lastError = e.message ?: "Cannot start call" }
+                else requestCallPermissions(video) {
+                    try {
+                        val group = GroupStore.find(selectedPeer.id)
+                        if (group != null) GroupCallController.start(group, video) else CallController.start(selectedPeer, video)
+                    } catch (e: Exception) { FamilyStore.lastError = e.message ?: "Cannot start call" }
+                }
             })
         } else {
             Box(Modifier.weight(1f)) {
@@ -237,7 +262,7 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
                     0 -> ChatsPage(contacts, onOpen = { FamilyStore.markChatViewed(it); FamilyStore.selectedPeer = it; tab = 0 })
                     1 -> CallsPage(contacts) { peer, video ->
                         if (BuildConfig.PUBLIC_RELAY) FamilyStore.lastError = "Calls require the secure media relay, which is not ready."
-                        else if (askCallPermissions(video)) CallController.start(peer, video)
+                        else requestCallPermissions(video) { CallController.start(peer, video) }
                     }
                     2 -> ContactsPage(contacts, onOpen = { FamilyStore.selectedPeer = it; tab = 0 },
                         onConnectionSettings = { tab = 3 })
@@ -270,7 +295,9 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
     if (groupIncoming != null) AlertDialog(onDismissRequest = {}, title = { Text("Incoming group call") },
         text = { Text(GroupStore.find(groupIncoming.groupId)?.title ?: "Family group") },
         confirmButton = { Button(onClick = {
-            if (askCallPermissions(groupIncoming.video)) GroupCallController.accept()
+            requestCallPermissions(groupIncoming.video) {
+                if (GroupCallController.incoming != null) GroupCallController.accept()
+            }
         }) { Text("Join") } }, dismissButton = {
             TextButton(onClick = { GroupCallController.hangup() }) { Text("Decline") }
         })
@@ -305,7 +332,9 @@ private fun FamilyTouchUI(askCallPermissions: (Boolean) -> Boolean, onNicknameFi
         AlertDialog(onDismissRequest = {}, title = { Text("Incoming " + (if (incoming.isVideo) "video" else "voice") + " call") },
             text = { Text(peerName + " is calling over your private family network.") },
             confirmButton = {
-                Button(onClick = { if (askCallPermissions(incoming.isVideo)) CallController.accept() }) { Text("Answer") }
+                Button(onClick = { requestCallPermissions(incoming.isVideo) {
+                    if (FamilyStore.incomingCall != null) CallController.accept()
+                } }) { Text("Answer") }
             }, dismissButton = {
                 TextButton(onClick = { CallController.hangup() }) { Text("Decline") }
             })
@@ -584,6 +613,8 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
         } }, confirmButton = { TextButton(onClick = { actionMessage = null }) { Text("Close") } }) }
     val context = LocalContext.current
     var locationPreview by remember { mutableStateOf<String?>(null) }
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
     LaunchedEffect(peer.id) {
         while (true) {
             if (group == null && FamilyStore.appVisible) {
@@ -648,6 +679,17 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
             try { PeerOutbox.queue(peer, text); true }
             catch (e: Exception) { FamilyStore.lastError = e.message ?: "Message could not be queued"; false }
         } else false
+    }
+    val submitDraft: () -> Unit = {
+        val quoted = replyTo?.let { (AttachmentTransport.parse(it.text)?.name ?: it.text).replace('\n', ' ').take(180) }
+        val text = if (quoted != null) "↪ $quoted\n\n${draft.trim()}" else draft.trim()
+        if (sendChat(text)) {
+            draft = ""
+            replyTo = null
+            keyboardController?.hide()
+            focusManager.clearFocus()
+            ChatSendSound.play()
+        }
     }
     val requestLocation: () -> Unit = {
         locationBusy = true
@@ -716,14 +758,16 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
                         val attachment = AttachmentTransport.parse(msg.text)
                         if (group != null && !msg.outgoing) Text(FamilyStore.find(msg.senderId)?.name ?: "Family member", fontSize = 11.sp, color = secondaryColor)
                         if (attachment != null) {
-                            Text((if (attachment.mime.startsWith("image/")) "Photo" else if (attachment.mime.startsWith("audio/")) "Voice / audio" else "Video") +
-                                " · " + attachment.name, color = textColor, maxLines = 2)
-                            Text(((attachment.size + 1023) / 1024).toString() + " KB",
-                                fontSize = 11.sp, color = secondaryColor)
-                            Text("Tap to open attachment", color = actionColor,
-                                modifier = Modifier.clickable {
-                                    viewedMedia = attachment
-                                })
+                            if (attachment.mime.startsWith("audio/")) {
+                                VoiceMessagePlayer(attachment, textColor)
+                            } else {
+                                Text((if (attachment.mime.startsWith("image/")) "Photo" else "Video") +
+                                    " · " + attachment.name, color = textColor, maxLines = 2)
+                                Text(((attachment.size + 1023) / 1024).toString() + " KB",
+                                    fontSize = 11.sp, color = secondaryColor)
+                                Text("Tap to view", color = actionColor,
+                                    modifier = Modifier.clickable { viewedMedia = attachment })
+                            }
                         } else if (msg.text.startsWith("Location: https://www.google.com/maps?q=")) {
                             Text("Shared location", color = textColor)
                             Text("Open in Maps", color = actionColor,
@@ -756,9 +800,9 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
             IconButton(onClick = {
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
                     voiceNote = true else voicePermission.launch(Manifest.permission.RECORD_AUDIO)
-            }, enabled = !sendingMedia) { Icon(Icons.Outlined.Mic, "Record voice note", tint = accent) }
+            }, enabled = !BuildConfig.PUBLIC_RELAY && !sendingMedia) { Icon(Icons.Outlined.Mic, "Record voice note", tint = accent) }
             IconButton(onClick = { selectMedia.launch(arrayOf("image/*", "video/*")) },
-                enabled = !sendingMedia) {
+                enabled = !BuildConfig.PUBLIC_RELAY && !sendingMedia) {
                 Icon(Icons.Outlined.AttachFile, "Attach up to 10 photos or videos", tint = accent)
             }
             IconButton(onClick = {
@@ -783,14 +827,12 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
                     )
                 ),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { }),
+                keyboardActions = KeyboardActions(onSend = { submitDraft() }),
                 shape = RoundedCornerShape(24.dp), maxLines = 5)
             Spacer(Modifier.width(6.dp))
-            FilledIconButton(enabled = draft.isNotBlank(), onClick = {
-                val quoted = replyTo?.let { (AttachmentTransport.parse(it.text)?.name ?: it.text).replace('\n', ' ').take(180) }
-                val text = if (quoted != null) "↪ $quoted\n\n${draft.trim()}" else draft.trim()
-                if (sendChat(text)) { draft = ""; replyTo = null }
-            }) { Icon(Icons.Outlined.Send, "Send") }
+            FilledIconButton(enabled = draft.isNotBlank(), onClick = { submitDraft() }) {
+                Icon(Icons.Outlined.Send, "Send")
+            }
         }
     }
 }

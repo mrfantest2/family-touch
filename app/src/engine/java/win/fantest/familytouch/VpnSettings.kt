@@ -65,7 +65,7 @@ internal fun VpnSettings() {
     val inCall = FamilyStore.activeCall != null || FamilyStore.incomingCall != null ||
         GroupCallController.session != null || GroupCallController.incoming != null
     Text("Built-in private VPN", style = MaterialTheme.typography.titleMedium)
-    Text("Family Touch manages its own private connection. No separate VPN app needed.",
+    Text("One built-in Tailscale connection for Family Touch and other Android apps on your approved tailnet. No separate VPN app needs to stay on.",
         style = MaterialTheme.typography.bodySmall)
     Text(status.label, color = if (status.connected) androidx.compose.ui.graphics.Color(0xFF5DDAA7)
         else MaterialTheme.colorScheme.onSurface)

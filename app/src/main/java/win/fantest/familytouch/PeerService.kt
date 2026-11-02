@@ -30,7 +30,7 @@ class PeerService : Service() {
     private var listener: ServerSocket? = null
     private var listenJob: Job? = null
     private val channel = "familytouch_status_silent_v3"
-    private val messageChannel = "familytouch_messages_v3"
+    private val messageChannel = "familytouch_messages_heads_up_v4"
     private val callChannel = "familytouch_calls_v3"
 
     override fun onCreate() {
@@ -57,8 +57,14 @@ class PeerService : Service() {
             NotificationManager.IMPORTANCE_LOW).apply {
             setSound(null, null); enableVibration(false); setShowBadge(false)
         })
-        nm.createNotificationChannel(NotificationChannel(messageChannel, "Family Touch messages",
-            NotificationManager.IMPORTANCE_DEFAULT))
+        nm.createNotificationChannel(NotificationChannel(messageChannel, "Family Touch message pop-ups",
+            NotificationManager.IMPORTANCE_HIGH).apply {
+            description = "Show new message banners, sounds and vibration outside the app"
+            enableVibration(true)
+            setSound(android.provider.Settings.System.DEFAULT_NOTIFICATION_URI,
+                android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
+        })
         nm.createNotificationChannel(NotificationChannel(callChannel, "Family Touch incoming calls",
             NotificationManager.IMPORTANCE_HIGH).apply {
             setSound(null,null); enableVibration(false)
@@ -196,17 +202,24 @@ class PeerService : Service() {
             .build()
     }
 
-    private fun openApp(): PendingIntent {
-        val intent = Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        return PendingIntent.getActivity(this, 5, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    private fun openApp(peerId: String? = null): PendingIntent {
+        val intent = Intent(this, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        if (peerId != null) intent.putExtra("open_peer_id", peerId)
+        return PendingIntent.getActivity(this, peerId?.hashCode() ?: 5, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     }
 
     private fun showNotification(title: String, text: String, call: Boolean = false, peerId: String? = null) {
         if (!call && FamilyStore.appVisible && FamilyStore.selectedPeer == peerId) return
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         val c = if (call) callChannel else messageChannel
-        val builder = NotificationCompat.Builder(this, c).setSmallIcon(android.R.drawable.stat_notify_chat)
-            .setContentTitle(title).setContentText(text).setContentIntent(openApp()).setAutoCancel(true)
+        val builder = NotificationCompat.Builder(this, c).setSmallIcon(R.drawable.ic_family_touch)
+            .setContentTitle(title).setContentText(text)
+            .setContentIntent(openApp(peerId)).setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(if (call) NotificationCompat.CATEGORY_CALL else NotificationCompat.CATEGORY_MESSAGE)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
         if (call) {
             builder.setCategory(NotificationCompat.CATEGORY_CALL).setPriority(NotificationCompat.PRIORITY_HIGH)
         }
