@@ -197,7 +197,7 @@ object CallController {
                     connectedSinceMs = System.currentTimeMillis()
                 }
                 if (state == PeerConnection.IceConnectionState.FAILED && !closing && FamilyStore.activeCall != null) {
-                    FamilyStore.lastError = "Call network interrupted. Confirm both devices have their private connection turned on."
+                    FamilyStore.lastError = "Call ICE connection failed. Both phones must be reachable on the same tailnet; check VPN ownership and permissions."
                 }
                 if (state == PeerConnection.IceConnectionState.FAILED || state == PeerConnection.IceConnectionState.DISCONNECTED)
                     io.launch(Dispatchers.Main) { RecordingCoordinator.stop("Call connection interrupted") }
@@ -266,8 +266,17 @@ object CallController {
             connection?.createOffer(object : SdpObserver {
                 override fun onCreateSuccess(sdp: SessionDescription?) {
                     if (sdp == null) return
-                    connection?.setLocalDescription(noop(), sdp)
-                    signal("offer", JSONObject().put("sdp", sdp.description).put("video", video))
+                    connection?.setLocalDescription(object : SdpObserver {
+                        override fun onCreateSuccess(sdp: SessionDescription?) {}
+                        override fun onCreateFailure(error: String?) {}
+                        override fun onSetSuccess() {
+                            signal("offer", JSONObject().put("sdp", sdp.description).put("video", video))
+                        }
+                        override fun onSetFailure(error: String?) {
+                            FamilyStore.lastError = "Unable to start call: " + error.orEmpty()
+                            hangup()
+                        }
+                    }, sdp)
                 }
                 override fun onCreateFailure(error: String?) { FamilyStore.lastError = error.orEmpty() }
                 override fun onSetSuccess() {}
@@ -283,15 +292,25 @@ object CallController {
             RingtonePlayer.stop()
             prepare(peer, invitation.isVideo)
             beginLog(invitation.isVideo, false)
-            pendingIce.addAll(earlyIce.remove(peer.id).orEmpty())
+            pendingIce.addAll(earlyIce.remove(peer.id + "\n" + invitation.sessionId).orEmpty())
+            pendingIce.addAll(earlyIce.remove(peer.id + "\n").orEmpty())
             FamilyStore.activeCall = invitation.copy(outgoing = false)
             FamilyStore.incomingCall = null
             setRemote(SessionDescription(SessionDescription.Type.OFFER, invitation.offer)) {
                 connection?.createAnswer(object : SdpObserver {
                     override fun onCreateSuccess(sdp: SessionDescription?) {
                         if (sdp == null) return
-                        connection?.setLocalDescription(noop(), sdp)
-                        signal("answer", JSONObject().put("sdp", sdp.description))
+                        connection?.setLocalDescription(object : SdpObserver {
+                            override fun onCreateSuccess(sdp: SessionDescription?) {}
+                            override fun onCreateFailure(error: String?) {}
+                            override fun onSetSuccess() {
+                                signal("answer", JSONObject().put("sdp", sdp.description))
+                            }
+                            override fun onSetFailure(error: String?) {
+                                FamilyStore.lastError = "Unable to answer call: " + error.orEmpty()
+                                hangup()
+                            }
+                        }, sdp)
                     }
                     override fun onCreateFailure(error: String?) { FamilyStore.lastError = error.orEmpty() }
                     override fun onSetSuccess() {}
@@ -354,15 +373,26 @@ object CallController {
                     }
                 }
             }
-            "answer" -> if (currentPeer?.id == peerId && ready) {
+            "answer" -> if (currentPeer?.id == peerId && ready &&
+                (data.optString("callSession").isBlank() ||
+                    data.optString("callSession") == FamilyStore.activeCall?.sessionId)) {
                 setRemote(SessionDescription(SessionDescription.Type.ANSWER, data.getString("sdp")))
             }
             "ice" -> {
+                val session = data.optString("callSession")
+                val activeSession = FamilyStore.activeCall?.sessionId
+                    ?: FamilyStore.incomingCall?.sessionId
+                if (activeSession != null && session.isNotBlank() && activeSession != session) return
                 val candidate = IceCandidate(data.optString("mid"), data.getInt("mLine"), data.getString("candidate"))
                 if (currentPeer?.id == peerId && ready) {
-                    if (hasRemoteDescription) connection?.addIceCandidate(candidate) else pendingIce.add(candidate)
+                    if (hasRemoteDescription) connection?.addIceCandidate(candidate)
+                    else if (pendingIce.size < 128) pendingIce.add(candidate)
                 } else {
-                    earlyIce.getOrPut(peerId) { java.util.concurrent.CopyOnWriteArrayList() }.add(candidate)
+                    val key = peerId + "\n" + session
+                    if (earlyIce.size < 32) {
+                        val buffered = earlyIce.getOrPut(key) { java.util.concurrent.CopyOnWriteArrayList() }
+                        if (buffered.size < 128) buffered.add(candidate)
+                    }
                 }
             }
             "hangup" -> {
