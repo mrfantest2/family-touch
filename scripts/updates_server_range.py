@@ -9,6 +9,8 @@ ALLOWED = {
     "/manifests/win.fantest.familytouch.embedded.json": ("embedded.json", "application/json"),
     "/manifests/win.fantest.familytouch.admin.json": ("admin.json", "application/json"),
     "/apks/embedded.apk": ("embedded.apk", "application/vnd.android.package-archive"),
+    "/apks/embedded-beta-v35.apk": ("beta/embedded-v35.apk", "application/vnd.android.package-archive"),
+    "/apks/drive/embedded-beta-v35.apk": ("drive/embedded.apk", "application/vnd.android.package-archive"),
     "/apks/admin.apk": ("admin.apk", "application/vnd.android.package-archive"),
 }
 MAX_SIZE = 250_000_000
