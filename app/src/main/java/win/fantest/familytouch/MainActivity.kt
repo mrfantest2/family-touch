@@ -870,7 +870,8 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
             }) { Text("Delete") } },
             dismissButton = { TextButton(onClick = { deleteChoice = null }) { Text("Cancel") } })
     }
-    var locationPreview by remember { mutableStateOf<String?>(null) }
+    var mapCenter by remember(peer.id) { mutableStateOf<Pair<Double,Double>?>(null) }
+    var showMapPicker by remember(peer.id) { mutableStateOf(false) }
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
     LaunchedEffect(peer.id) {
@@ -983,10 +984,9 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
         locationJob = scope.launch {
             try {
                 val loc = LocationShareController.request(context)
-                locationPreview = "https://www.google.com/maps?q=" +
-                    String.format(Locale.US, "%.6f,%.6f", loc.latitude, loc.longitude)
-                locationDetails = "Accuracy about ${loc.accuracy.toInt()} m · " +
-                    DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(loc.time))
+                mapCenter = loc.latitude to loc.longitude
+                showMapPicker = true
+                locationDetails = "Location accuracy about " + loc.accuracy.toInt() + " m"
             } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
                 FamilyStore.lastError = "No fresh location within 30 seconds. Check Location settings and try again."
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
@@ -1021,7 +1021,7 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
             AttachmentChoice("Documents and files", Icons.Outlined.InsertDriveFile) {
                 selectMedia.launch(arrayOf("*/*"))
             }
-            AttachmentChoice("Location (one-time)", Icons.Outlined.LocationOn) {
+            AttachmentChoice("Location: map pin or live", Icons.Outlined.LocationOn) {
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
                     PackageManager.PERMISSION_GRANTED ||
                     ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
@@ -1033,18 +1033,26 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
             Spacer(Modifier.height(20.dp))
         }
     }
-    if (locationPreview != null) {
-        AlertDialog(onDismissRequest = { locationPreview = null },
-            title = { Text("Share your location?") },
-            text = { Text("Send this one-time map location to " + peer.name +
-                "? $locationDetails. It will remain in chat history. This does not enable live tracking.") },
-            confirmButton = {
-                Button(onClick = {
-                    locationPreview?.let { url -> sendChat("Location: " + url) }
-                    locationPreview = null
-                }) { Text("Send location") }
-            }, dismissButton = {
-                TextButton(onClick = { locationPreview = null }) { Text("Cancel") }
+    val chosenCenter = mapCenter
+    if (showMapPicker && chosenCenter != null) {
+        LocationPinPicker(chosenCenter.first, chosenCenter.second, peer.name,
+            direct = group == null,
+            onDismiss = { showMapPicker = false; mapCenter = null },
+            onSendPin = { lat, lon ->
+                val map = String.format(Locale.US,
+                    "https://www.google.com/maps?q=%.6f,%.6f", lat,lon)
+                if (sendChat("Location: " + map)) {
+                    showMapPicker = false; mapCenter = null
+                }
+            },
+            onStartLive = { duration ->
+                try {
+                    LiveLocationSharing.begin(context, peer, duration)
+                    showMapPicker = false
+                    mapCenter = null
+                } catch (ex: Exception) {
+                    FamilyStore.lastError = "Live location failed: " + (ex.message ?: "Unavailable")
+                }
             })
     }
     Column(Modifier.fillMaxSize().background(bg)) {
@@ -1150,6 +1158,9 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
                         } else if (msg.deletedForEveryone) {
                             Text("This message was deleted", color = muted, fontSize = 14.sp,
                                 fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
+                        } else if (LiveLocationProtocol.parse(msg.text) != null) {
+                            LiveLocationBubble(requireNotNull(LiveLocationProtocol.parse(msg.text)),
+                                msg.outgoing) { LiveLocationSharing.stop(context) }
                         } else if (msg.text.startsWith("Location: https://www.google.com/maps?q=")) {
                             ChatLocationPreview(msg.text.removePrefix("Location: ")) {
                                 try {
@@ -1197,6 +1208,19 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
             }
             TextButton(onClick = { replyTo = null }) { Text("✕", color = muted) }
         } }
+        LiveLocationSharing.active?.let { share ->
+            if (share.peerId == peer.id) {
+                Row(Modifier.fillMaxWidth().background(Color(0xFF26423C))
+                    .padding(horizontal = 12.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Text("Live location is active", Modifier.weight(1f),
+                        color = Color(0xFF8FFFD5), fontSize = 12.sp)
+                    TextButton(onClick = { LiveLocationSharing.stop(context) }) {
+                        Text("Stop now", color = Color(0xFFFFB8B8))
+                    }
+                }
+            }
+        }
         if (voiceNote) {
             InlineVoiceComposer(onDismiss = { voiceNote = false }, onSend = sendVoiceNote)
         } else Row(Modifier.fillMaxWidth().background(bg).padding(horizontal = 6.dp, vertical = 6.dp),
