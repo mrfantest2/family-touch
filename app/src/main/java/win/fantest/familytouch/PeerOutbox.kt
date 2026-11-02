@@ -30,9 +30,9 @@ internal object PeerOutbox {
         return item
     }
     suspend fun flush() = mutex.withLock {
-        if (!::context.isInitialized || !EmbeddedTailnet.status.connected) return@withLock
+        if (!::context.isInitialized || (!BuildConfig.PUBLIC_RELAY && !EmbeddedTailnet.status.connected)) return@withLock
         val pending = withContext(Dispatchers.Main) { FamilyStore.messages.filter {
-            it.outgoing && !it.delivered && !it.peerId.startsWith("group:")
+            it.outgoing && !it.delivered && (!BuildConfig.PUBLIC_RELAY || !it.sent) && !it.peerId.startsWith("group:")
         }.toList() }
         val permits = Semaphore(4)
         coroutineScope {
@@ -42,10 +42,13 @@ internal object PeerOutbox {
                     for (item in items.take(20)) {
                         try {
                             val media = AttachmentTransport.parse(item.text)
-                            if (media != null) AttachmentTransport.sendPrepared(context, peer, media)
-                            else Tailnet.send(peer, "message", JSONObject().put("messageId", item.id).put("text", item.text),
+                            if (media != null) {
+                                check(!BuildConfig.PUBLIC_RELAY) { "Public media relay is not ready" }
+                                AttachmentTransport.sendPrepared(context, peer, media)
+                            } else Tailnet.send(peer, "message", JSONObject().put("messageId", item.id).put("text", item.text),
                                 onWritten = { withContext(Dispatchers.Main) { FamilyStore.sent(item.id) } })
-                            withContext(Dispatchers.Main) { FamilyStore.delivered(item.id) }
+                            if (!BuildConfig.PUBLIC_RELAY)
+                                withContext(Dispatchers.Main) { FamilyStore.delivered(item.id) }
                         } catch (e: CancellationException) { throw e }
                         catch (_: Exception) { break /* Retry in order when this peer becomes reachable. */ }
                     }

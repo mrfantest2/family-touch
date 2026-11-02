@@ -30,6 +30,20 @@ object FamilyStore {
     val callHistory: List<CallLogRecord> get() = calls
     val peerPresence = mutableStateMapOf<String, String>()
     val peerPhotos = mutableStateMapOf<String, String>()
+    private val chatViewedAt = mutableStateMapOf<String, Long>()
+    fun unreadFor(peerId: String): Int {
+        val viewed = chatViewedAt[peerId] ?: 0L
+        return chat.count { !it.outgoing && it.peerId == peerId && !it.read && it.time > viewed }
+    }
+    fun unreadTotal(): Int = contacts.sumOf { unreadFor(it.id) }
+    fun markChatViewed(peerId: String) {
+        chatViewedAt[peerId] = System.currentTimeMillis()
+        val obj = JSONObject()
+        chatViewedAt.forEach { (key, value) -> obj.put(key, value) }
+        if (::context.isInitialized)
+            context.getSharedPreferences("identity", Context.MODE_PRIVATE)
+                .edit().putString("chatViewedAt", obj.toString()).apply()
+    }
     var profilePhoto by mutableStateOf("")
         private set
     fun updateProfilePhoto(encoded: String) {
@@ -86,6 +100,10 @@ object FamilyStore {
             .joinToString("") { "%02x".format(it) }.also { p.edit().putString("pairingSecret", it).apply() }
         nickname = p.getString("nickname", null) ?: (Build.MANUFACTURER + " " + Build.MODEL).trim()
         profilePhoto = p.getString("profilePhoto", "").orEmpty()
+        try {
+            val stored = JSONObject(p.getString("chatViewedAt", "{}").orEmpty())
+            for (key in stored.keys()) chatViewedAt[key] = stored.optLong(key, 0)
+        } catch (_: Exception) { }
         try {
             val images = JSONObject(p.getString("peerPhotos", "{}").orEmpty())
             for (key in images.keys()) peerPhotos[key] = images.optString(key)

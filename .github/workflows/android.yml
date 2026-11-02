@@ -27,7 +27,16 @@ jobs:
           yes | "$SDKMGR" --licenses >/dev/null || true
           "$SDKMGR" --sdk_root="$ANDROID_HOME" "platforms;android-36" "build-tools;36.0.0"
       - name: Unit tests
-        run: gradle --no-daemon :app:testDebugUnitTest :app:testExternalUnitTest
+        run: gradle --no-daemon :app:testDebugUnitTest :app:testQaUnitTest
+      - name: Verify Admin does not occupy Android VPN slot
+        run: |
+          gradle --no-daemon :app:processAdminManifest :app:compileAdminKotlin
+          ADMIN_MANIFEST="$(find app/build/intermediates/merged_manifest/admin -name AndroidManifest.xml | head -n 1)"
+          test -f "$ADMIN_MANIFEST"
+          if grep -Eq 'android.permission.BIND_VPN_SERVICE|android.net.VpnService|FamilyVpnService' "$ADMIN_MANIFEST"; then
+            echo "Admin manifest improperly declares a VPN service" >&2
+            exit 1
+          fi
       - name: Build APK without launching any device
         run: gradle --no-daemon :app:assembleDebug :app:assembleQa
       - name: Build signed internal APK and AAB when signing secrets are configured
@@ -45,7 +54,7 @@ jobs:
           export FAMILY_TOUCH_KEYSTORE_FILE="$RUNNER_TEMP/familytouch-upload.p12"
           printf '%s' "$FT_KEYSTORE_B64" | base64 -d > "$FAMILY_TOUCH_KEYSTORE_FILE"
           chmod 600 "$FAMILY_TOUCH_KEYSTORE_FILE"
-          gradle --no-daemon :app:assembleRelease :app:bundleRelease :app:assembleEmbedded :app:assembleExternal
+          gradle --no-daemon :app:assembleRelease :app:bundleRelease :app:assembleEmbedded :app:assembleAdmin
           rm -f "$FAMILY_TOUCH_KEYSTORE_FILE"
       - uses: actions/upload-artifact@v4
         if: always()
@@ -55,7 +64,7 @@ jobs:
             app/build/outputs/apk/release/*.apk
             app/build/outputs/bundle/release/*.aab
             app/build/outputs/apk/embedded/*.apk
-            app/build/outputs/apk/external/*.apk
+            app/build/outputs/apk/admin/*.apk
           if-no-files-found: ignore
           retention-days: 14
       - uses: actions/upload-artifact@v4

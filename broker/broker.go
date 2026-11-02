@@ -58,6 +58,7 @@ type KeyProvider interface {
 type IPProber interface {
 	Verify(context.Context, string, string, *ecdsa.PublicKey) error
 }
+
 // Private Tailnet Serve requests carry the authenticated WireGuard source IP.
 // Only the isolated tailnet-only listener in main.go may set this context key.
 type verifiedTailnetSourceKey struct{}
@@ -77,8 +78,8 @@ type Device struct {
 	CreatedAt       int64
 }
 type DeletedRecord struct {
-	Name string
-	Model string
+	Name      string
+	Model     string
 	DeletedAt int64
 }
 type Config struct {
@@ -93,6 +94,7 @@ type diskState struct {
 	Devices map[string]*Device
 	Nonces  map[string]int64
 	Deleted []DeletedRecord
+	Relay map[string][]RelayEnvelope
 }
 type Broker struct {
 	mu                 sync.Mutex
@@ -105,6 +107,7 @@ type Broker struct {
 	devices            map[string]*Device
 	nonces             map[string]int64
 	deleted            []DeletedRecord
+	relay              map[string][]RelayEnvelope
 	csrf               string
 	sources            map[string]sourceWindow
 	trustProxyClientIP bool
@@ -125,7 +128,7 @@ func NewBroker(dir string, p Protector, k KeyProvider, probe IPProber) (*Broker,
 	if err := secureDirectory(dir); err != nil {
 		return nil, err
 	}
-	b := &Broker{dir: dir, protector: p, provider: k, prober: probe, devices: map[string]*Device{}, nonces: map[string]int64{}, sources: map[string]sourceWindow{}, csrf: randomHex(32)}
+	b := &Broker{dir: dir, protector: p, provider: k, prober: probe, devices: map[string]*Device{}, nonces: map[string]int64{}, sources: map[string]sourceWindow{}, relay: map[string][]RelayEnvelope{}, csrf: randomHex(32)}
 	data, e := os.ReadFile(filepath.Join(dir, "registry.protected"))
 	if e == nil {
 		plain, e := p.Unprotect(data)
@@ -140,6 +143,7 @@ func NewBroker(dir string, p Protector, k KeyProvider, probe IPProber) (*Broker,
 		b.config = s.Config
 		b.devices = s.Devices
 		b.deleted = s.Deleted
+		b.relay = s.Relay
 		if len(b.deleted) > maxDeletionHistory {
 			b.deleted = b.deleted[len(b.deleted)-maxDeletionHistory:]
 		}
@@ -149,6 +153,7 @@ func NewBroker(dir string, p Protector, k KeyProvider, probe IPProber) (*Broker,
 	} else if !os.IsNotExist(e) {
 		return nil, e
 	}
+	if b.relay == nil { b.relay = map[string][]RelayEnvelope{} }
 	if b.devices == nil {
 		b.devices = map[string]*Device{}
 	}
@@ -174,7 +179,7 @@ func NewBroker(dir string, p Protector, k KeyProvider, probe IPProber) (*Broker,
 	return b, nil
 }
 func (b *Broker) save() error {
-	plain, e := json.Marshal(diskState{b.master, b.config, b.devices, b.nonces, b.deleted})
+	plain, e := json.Marshal(diskState{Master:b.master, Config:b.config, Devices:b.devices, Nonces:b.nonces, Deleted:b.deleted, Relay:b.relay})
 	if e != nil {
 		return e
 	}
@@ -292,6 +297,7 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		b.admin(w, r)
 		return
 	}
+	if r.URL.Path == "/api/v1/relay/send" || r.URL.Path == "/api/v1/relay/pull" { b.publicRelay(w,r); return }
 	if r.Method != "POST" || (r.URL.Path != "/api/v1/enroll" && r.URL.Path != "/api/v1/sync") {
 		http.NotFound(w, r)
 		return
@@ -319,6 +325,7 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		NeedsAuth            bool   `json:"needsAuth"`
 		PreviousEnvelopeHash string `json:"previousEnvelopeHash"`
 		IP                   string `json:"ip"`
+		PublicRelay          bool `json:"publicRelay"`
 	}
 	if json.Unmarshal(body, &req) != nil || len([]rune(req.Name)) > 36 || len([]rune(req.Model)) > 80 || !validProfile(req.ProfileID) {
 		http.Error(w, "invalid request", 400)
@@ -465,6 +472,21 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", 403)
 		return
 	}
+	if req.PublicRelay {
+		d.Name = req.Name
+		d.ProfileID = req.ProfileID
+		if b.save() != nil { http.Error(w,"storage unavailable",503); return }
+		peers := []map[string]string{}
+		for other, peer := range b.devices {
+			if other != id && peer.Approved && !peer.Revoked && peer.ProfileID != "" {
+				peers = append(peers, map[string]string{"id":peer.ProfileID,"name":peer.Name,"ip":"relay","secret":b.pair(id,other)})
+			}
+		}
+		if len(peers) > 64 { http.Error(w,"roster too large",503); return }
+		sort.Slice(peers,func(i,j int)bool{return peers[i]["id"]<peers[j]["id"]})
+		jsonReply(w,200,map[string]any{"state":"ready","peers":peers})
+		return
+	}
 	ip := net.ParseIP(req.IP)
 	v := ip.To4()
 	if v == nil || v[0] != 100 || v[1] < 64 || v[1] > 127 {
@@ -604,6 +626,10 @@ func (b *Broker) admin(w http.ResponseWriter, r *http.Request) {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if strings.HasPrefix(r.URL.Path, "/admin/api/v1/") {
+		b.adminNative(w, r)
+		return
+	}
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 	if r.Method == "GET" && r.URL.Path == "/admin" {
 		type row struct {
@@ -616,9 +642,9 @@ func (b *Broker) admin(w http.ResponseWriter, r *http.Request) {
 		}
 		sort.Slice(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
 		_ = adminTemplate.Execute(w, struct {
-			CSRF string
-			Auto bool
-			Rows []row
+			CSRF    string
+			Auto    bool
+			Rows    []row
 			Deleted []DeletedRecord
 		}{b.csrf, b.config.AutoApprove, rows, b.deleted})
 		return

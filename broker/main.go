@@ -83,7 +83,7 @@ func main() {
 			log.Fatal("public proxy listener must be loopback")
 		}
 		api := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/api/v1/enroll" && r.URL.Path != "/api/v1/sync" {
+			if r.URL.Path != "/api/v1/enroll" && r.URL.Path != "/api/v1/sync" && r.URL.Path != "/api/v1/relay/send" && r.URL.Path != "/api/v1/relay/pull" {
 				http.NotFound(w, r)
 				return
 			}

@@ -30,7 +30,7 @@ class PeerService : Service() {
     private var listener: ServerSocket? = null
     private var listenJob: Job? = null
     private val channel = "familytouch_status_silent_v3"
-    private val messageChannel = "familytouch_messages_v3"
+    private val messageChannel = "familytouch_messages_heads_up_v4"
     private val callChannel = "familytouch_calls_v3"
 
     override fun onCreate() {
@@ -46,6 +46,9 @@ class PeerService : Service() {
         scope.launch {
             while (isActive) {
                 FamilyDirectory.refresh(this@PeerService)
+                if (BuildConfig.PUBLIC_RELAY)
+                    (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(
+                        NotificationIds.CONNECTION, connectionNotification())
                 delay(20000)
             }
         }
@@ -54,8 +57,14 @@ class PeerService : Service() {
             NotificationManager.IMPORTANCE_LOW).apply {
             setSound(null, null); enableVibration(false); setShowBadge(false)
         })
-        nm.createNotificationChannel(NotificationChannel(messageChannel, "Family Touch messages",
-            NotificationManager.IMPORTANCE_DEFAULT))
+        nm.createNotificationChannel(NotificationChannel(messageChannel, "Family Touch message pop-ups",
+            NotificationManager.IMPORTANCE_HIGH).apply {
+            description = "Show new message banners, sounds and vibration outside the app"
+            enableVibration(true)
+            setSound(android.provider.Settings.System.DEFAULT_NOTIFICATION_URI,
+                android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
+        })
         nm.createNotificationChannel(NotificationChannel(callChannel, "Family Touch incoming calls",
             NotificationManager.IMPORTANCE_HIGH).apply {
             setSound(null,null); enableVibration(false)
@@ -77,6 +86,7 @@ class PeerService : Service() {
         }
         scope.launch {
             while (isActive) {
+                if (BuildConfig.PUBLIC_RELAY) { delay(45_000L); continue }
                 val contacts = FamilyStore.contacts.toList()
                 for (peer in contacts) {
                     FamilyStore.peerPresence[peer.id] = try {
@@ -99,7 +109,21 @@ class PeerService : Service() {
                 delay(300_000L)
             }
         }
-        listenJob = scope.launch {
+        listenJob = if (BuildConfig.PUBLIC_RELAY) scope.launch {
+            while (isActive) {
+                try {
+                    val batch = PublicRelay.pull(this@PeerService)
+                    for (incoming in batch) {
+                        processPublic(incoming)
+                        PublicRelay.acknowledge(incoming.queueId)
+                    }
+                } catch (ex: Exception) {
+                    if (isActive) FamilyStore.lastError = "Public HTTPS sync: " +
+                        (ex.message ?: "temporarily unavailable")
+                }
+                delay(5_000)
+            }
+        } else scope.launch {
             while (isActive) {
                 val address = EmbeddedTailnet.status.takeIf { it.connected }?.address
                 if (address == null) { delay(1000); continue }
@@ -123,12 +147,54 @@ class PeerService : Service() {
         }
     }
 
+    private suspend fun processPublic(message: PublicRelay.Incoming) {
+        val peer = FamilyStore.find(message.from) ?: error("Unknown approved sender")
+        val json = message.payload
+        when (message.type) {
+            "message" -> {
+                val text = json.getString("text")
+                val id = json.getString("messageId")
+                require(text.isNotBlank() && text.length <= 6000)
+                UUID.fromString(id)
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    if (FamilyStore.messages.none { it.id == id }) {
+                        FamilyStore.addChat(ChatItem(id, peer.id, false, text,
+                            System.currentTimeMillis(), true))
+                        showNotification(peer.name, text.take(100), peerId = peer.id)
+                    }
+                }
+                PublicRelay.send(this, peer, "delivery_receipt", JSONObject().put("messageId", id))
+            }
+            "delivery_receipt" -> {
+                val id = json.getString("messageId")
+                UUID.fromString(id)
+                kotlinx.coroutines.withContext(Dispatchers.Main) { FamilyStore.delivered(id) }
+            }
+            "read_receipt" -> {
+                val ids = json.getJSONArray("messageIds")
+                require(ids.length() <= 100)
+                val values = (0 until ids.length()).map { ids.getString(it) }.toSet()
+                kotlinx.coroutines.withContext(Dispatchers.Main) { FamilyStore.markRead(peer.id, values) }
+            }
+            "message_reaction" -> {
+                kotlinx.coroutines.withContext(Dispatchers.Main) { MessageReactions.receive(peer.id, json) }
+            }
+            "profile_update" -> {
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    FamilyStore.setPeerPhoto(peer.id, json.optString("avatar"))
+                }
+            }
+            else -> error("Unsupported HTTPS message")
+        }
+    }
+
     private fun connectionNotification(): Notification {
-        val connected = EmbeddedTailnet.status.connected
+        val connected = if (BuildConfig.PUBLIC_RELAY)
+            FamilyStore.directoryStatus.startsWith("Public HTTPS connected") else EmbeddedTailnet.status.connected
         return NotificationCompat.Builder(this, channel)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
-            .setContentTitle(if (connected) "Family Touch connected" else "Family Touch private connection")
-            .setContentText(if (connected) "Private messages and calls ready" else EmbeddedTailnet.status.label)
+            .setContentTitle(if (connected) "Family Touch connected" else if (BuildConfig.PUBLIC_RELAY) "Family Touch HTTPS" else "Family Touch private connection")
+            .setContentText(if (BuildConfig.PUBLIC_RELAY) "Encrypted text messaging preview; calls unavailable" else if (connected) "Private messages and calls ready" else EmbeddedTailnet.status.label)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setSilent(true)
@@ -136,17 +202,24 @@ class PeerService : Service() {
             .build()
     }
 
-    private fun openApp(): PendingIntent {
-        val intent = Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        return PendingIntent.getActivity(this, 5, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    private fun openApp(peerId: String? = null): PendingIntent {
+        val intent = Intent(this, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        if (peerId != null) intent.putExtra("open_peer_id", peerId)
+        return PendingIntent.getActivity(this, peerId?.hashCode() ?: 5, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     }
 
     private fun showNotification(title: String, text: String, call: Boolean = false, peerId: String? = null) {
         if (!call && FamilyStore.appVisible && FamilyStore.selectedPeer == peerId) return
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         val c = if (call) callChannel else messageChannel
-        val builder = NotificationCompat.Builder(this, c).setSmallIcon(android.R.drawable.stat_notify_chat)
-            .setContentTitle(title).setContentText(text).setContentIntent(openApp()).setAutoCancel(true)
+        val builder = NotificationCompat.Builder(this, c).setSmallIcon(R.drawable.ic_family_touch)
+            .setContentTitle(title).setContentText(text)
+            .setContentIntent(openApp(peerId)).setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(if (call) NotificationCompat.CATEGORY_CALL else NotificationCompat.CATEGORY_MESSAGE)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
         if (call) {
             builder.setCategory(NotificationCompat.CATEGORY_CALL).setPriority(NotificationCompat.PRIORITY_HIGH)
         }

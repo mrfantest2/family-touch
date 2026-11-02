@@ -69,7 +69,7 @@ internal object MessageReactions {
         if (version > old) { values[key] = JSONObject().put("emoji", emoji).put("version", version).toString(); save() }
     }
     private suspend fun flush() = mutex.withLock {
-        if (!EmbeddedTailnet.status.connected) return@withLock
+        if (!BuildConfig.PUBLIC_RELAY && !EmbeddedTailnet.status.connected) return@withLock
         for (item in synchronized(this) { pending.toList() }) {
             try {
                 val peer = FamilyStore.find(item.getString("peer")) ?: continue

@@ -12,9 +12,11 @@ android {
         applicationId = "win.fantest.familytouch"
         minSdk = 29
         targetSdk = 36
-        versionCode = 16
-        versionName = "0.2.1-unified02"
+        versionCode = 25
+        versionName = "0.3.8-autoupdate01"
         buildConfigField("boolean", "EMBEDDED_VPN", "true")
+        buildConfigField("boolean", "PUBLIC_RELAY", "false")
+        buildConfigField("boolean", "ADMIN_APP", "false")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["familyTouchAppLabel"] = "Family Touch"
     }
@@ -47,12 +49,21 @@ android {
             manifestPlaceholders["familyTouchAppLabel"] = "Family Touch"
             matchingFallbacks += listOf("release")
         }
-        create("external") {
+        create("public") {
             initWith(getByName("release"))
-            applicationIdSuffix = ".external"
-            versionNameSuffix = "-external"
+            applicationIdSuffix = ".public"
+            versionNameSuffix = "-public"
             buildConfigField("boolean", "EMBEDDED_VPN", "false")
-            manifestPlaceholders["familyTouchAppLabel"] = "Family Touch External"
+            buildConfigField("boolean", "PUBLIC_RELAY", "true")
+            manifestPlaceholders["familyTouchAppLabel"] = "Family Touch Public Preview"
+            matchingFallbacks += listOf("release")
+        }
+        create("admin") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".admin"
+            versionNameSuffix = "-admin"
+            buildConfigField("boolean", "ADMIN_APP", "true")
+            manifestPlaceholders["familyTouchAppLabel"] = "Family Touch Admin"
             matchingFallbacks += listOf("release")
         }
     }
@@ -62,6 +73,12 @@ android {
                 java.srcDir("src/engine/java")
                 manifest.srcFile("src/engine/AndroidManifest.xml")
             }
+        }
+        getByName("admin") {
+            java.srcDir("src/engine/java")
+        }
+        getByName("public") {
+            java.srcDir("src/engine/java")
         }
     }
     compileOptions {
@@ -74,7 +91,7 @@ android {
 }
 
 dependencies {
-    listOf("debug", "release", "qa", "embedded").forEach { variant ->
+    listOf("debug", "release", "qa", "embedded", "admin", "public").forEach { variant ->
         add("${variant}Implementation", files("libs/libtailscale.aar"))
     }
     implementation("androidx.security:security-crypto:1.1.0")
