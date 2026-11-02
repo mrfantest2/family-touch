@@ -24,7 +24,12 @@ object AttachmentTransport {
     private fun validatedId(id: String) = UUID.fromString(id).toString()
     private fun nameOf(name: String): String =
         name.replace(Regex("[^a-zA-Z0-9 ._()-]"), "_").take(110).ifBlank { "Attachment" }
-    private fun allowed(mime: String) = mime.startsWith("image/") || mime.startsWith("video/") || VoiceNotePolicy.audioMime(mime)
+    private fun unsafeName(name: String): Boolean =
+        Regex("(?i)\\.(exe|apk|bat|cmd|ps1|sh|jar|dex|hta|vbs|js|html?)$").containsMatchIn(name)
+    private fun allowed(mime: String): Boolean =
+        mime.length in 3..110 &&
+            Regex("[a-zA-Z0-9][a-zA-Z0-9.+_-]*/[a-zA-Z0-9][a-zA-Z0-9.+_-]*").matches(mime) &&
+            mime != "application/vnd.android.package-archive"
     fun message(id: String, name: String, mime: String, size: Long) =
         "$MARK|$id|" + nameOf(name) + "|$mime|$size"
     data class Info(val id: String, val name: String, val mime: String, val size: Long)
@@ -34,7 +39,7 @@ object AttachmentTransport {
             val a = text.split("|", limit = 5)
             if (a.size != 5) return null
             val size = a[4].toLong()
-            if (size !in 1..MAX_BYTES || !allowed(a[3])) return null
+            if (size !in 1..MAX_BYTES || !allowed(a[3]) || unsafeName(a[2])) return null
             Info(validatedId(a[1]), nameOf(a[2]), a[3], size)
         } catch (_: Exception) { null }
     }

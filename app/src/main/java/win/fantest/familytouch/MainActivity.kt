@@ -65,6 +65,9 @@ import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.AttachFile
+import androidx.compose.material.icons.outlined.InsertDriveFile
+import androidx.compose.material.icons.outlined.Photo
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -212,6 +215,7 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
     var recordingsLibrary by remember { mutableStateOf(false) }
     var chatMenuExpanded by remember { mutableStateOf(false) }
     var chatMenuAction by remember { mutableStateOf<String?>(null) }
+    var showContactDetails by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var networkStatus by remember { mutableStateOf(EmbeddedTailnet.status) }
@@ -264,9 +268,11 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
                     IconButton(onClick = { FamilyStore.selectedPeer = null }) {
                         Icon(Icons.Outlined.ArrowBack, "Back", tint = ink)
                     }
-                    Avatar(selectedPeer.name, FamilyStore.peerPhotos[selectedPeer.id], 39.dp)
+                    Box(Modifier.clickable { showContactDetails = true }) {
+                        Avatar(selectedPeer.name, FamilyStore.peerPhotos[selectedPeer.id], 39.dp)
+                    }
                     Spacer(Modifier.width(8.dp))
-                    Column(Modifier.weight(1f)) {
+                    Column(Modifier.weight(1f).clickable { showContactDetails = true }) {
                         Text(selectedPeer.name, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
                             color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(FamilyStore.presenceLabel(selectedPeer.id), color = muted, fontSize = 11.sp,
@@ -284,6 +290,12 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
                         }
                         DropdownMenu(expanded = chatMenuExpanded, onDismissRequest = { chatMenuExpanded = false },
                             shape = RoundedCornerShape(16.dp)) {
+                            DropdownMenuItem(text = { Text("View contact profile") }, onClick = {
+                                chatMenuExpanded = false; showContactDetails = true
+                            })
+                            DropdownMenuItem(text = { Text("Clear chat on this device") }, onClick = {
+                                chatMenuExpanded = false; chatMenuAction = "clear"
+                            })
                             DropdownMenuItem(text = { Text("Search conversation") }, onClick = {
                                 chatMenuExpanded = false; chatMenuAction = "search"
                             })
@@ -355,6 +367,26 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
         }
     }
 
+    if (showContactDetails && selectedPeer != null) AlertDialog(
+        onDismissRequest = { showContactDetails = false },
+        title = { Text("Contact profile") },
+        text = {
+            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Avatar(selectedPeer.name, FamilyStore.peerPhotos[selectedPeer.id], 80.dp)
+                Text(selectedPeer.name, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                Text(FamilyStore.presenceLabel(selectedPeer.id), color = muted)
+                Text(if (GroupStore.find(selectedPeer.id) != null) "Private family group" else
+                    "Paired private family device", fontSize = 12.sp, color = muted)
+                Text("Shared media and messages are stored on your devices.",
+                    color = muted, fontSize = 12.sp)
+            }
+        },
+        confirmButton = { TextButton(onClick = { showContactDetails = false }) { Text("Close") } },
+        dismissButton = { TextButton(onClick = {
+            showContactDetails = false; chatMenuAction = "media"
+        }) { Text("Shared media") } }
+    )
     if (groupIncoming != null) AlertDialog(onDismissRequest = {}, title = { Text("Incoming group call") },
         text = { Text(GroupStore.find(groupIncoming.groupId)?.title ?: "Family group") },
         confirmButton = { Button(onClick = {
@@ -678,6 +710,11 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
     var emojiPickerOpen by remember(peer.id) { mutableStateOf(false) }
     var replyTo by remember(peer.id) { mutableStateOf<ChatItem?>(null) }
     var actionMessage by remember(peer.id) { mutableStateOf<ChatItem?>(null) }
+    var attachmentSheet by remember(peer.id) { mutableStateOf(false) }
+    var editMessage by remember(peer.id) { mutableStateOf<ChatItem?>(null) }
+    var editDraft by remember(peer.id) { mutableStateOf("") }
+    var deleteChoice by remember(peer.id) { mutableStateOf<Pair<ChatItem, Boolean>?>(null) }
+    var clearConfirmation by remember(peer.id) { mutableStateOf(false) }
     var gallery by remember(peer.id) { mutableStateOf(false) }
     var searching by remember(peer.id) { mutableStateOf(false) }
     var query by remember(peer.id) { mutableStateOf("") }
@@ -685,6 +722,7 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
         when (menuAction) {
             "search" -> searching = true
             "media" -> gallery = true
+            "clear" -> clearConfirmation = true
         }
         if (menuAction != null) onMenuHandled()
     }
@@ -706,7 +744,22 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
                         }, contentAlignment = Alignment.Center) { Text(emoji, fontSize = 23.sp) }
                     }
                 }
-                TextButton(onClick = { replyTo = item; actionMessage = null }) { Text("Reply", color = accent) }
+                TextButton(onClick = { replyTo = item; actionMessage = null }) {
+                    Text("Reply", color = accent)
+                }
+                if (MessageMutations.editable(item) && group == null) {
+                    TextButton(onClick = {
+                        editMessage = item; editDraft = item.text; actionMessage = null
+                    }) { Text("Edit message (15 minutes)", color = accent) }
+                }
+                TextButton(onClick = {
+                    deleteChoice = item to false; actionMessage = null
+                }) { Text("Delete for me", color = ink) }
+                if (group == null && MessageMutations.deletableForEveryone(item)) {
+                    TextButton(onClick = {
+                        deleteChoice = item to true; actionMessage = null
+                    }) { Text("Delete for everyone", color = Color(0xFFFF8888)) }
+                }
                 TextButton(onClick = {
                     try { MessageReactions.react(item, ""); actionMessage = null }
                     catch (_: Exception) { FamilyStore.lastError = "Reaction unavailable. Retry after reconnecting" }
@@ -715,6 +768,43 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
         }
     }
     val context = LocalContext.current
+    if (clearConfirmation) AlertDialog(onDismissRequest = { clearConfirmation = false },
+        title = { Text("Clear this chat?") },
+        text = { Text("Messages will be removed from this device only. This does not remove messages on other family devices.") },
+        confirmButton = { Button(onClick = {
+            FamilyStore.clearConversation(peer.id); clearConfirmation = false
+        }) { Text("Clear locally") } },
+        dismissButton = { TextButton(onClick = { clearConfirmation = false }) { Text("Cancel") } })
+    editMessage?.let { target ->
+        AlertDialog(onDismissRequest = { editMessage = null }, title = { Text("Edit sent message") },
+            text = {
+                OutlinedTextField(value = editDraft, onValueChange = { editDraft = it.take(6000) },
+                    label = { Text("Message") }, modifier = Modifier.fillMaxWidth(),
+                    minLines = 2, maxLines = 5)
+            },
+            confirmButton = { Button(enabled = editDraft.isNotBlank(), onClick = {
+                try { MessageMutations.edit(target, editDraft); editMessage = null }
+                catch (e: Exception) { FamilyStore.lastError = e.message ?: "Unable to edit message" }
+            }) { Text("Save edit") } },
+            dismissButton = { TextButton(onClick = { editMessage = null }) { Text("Cancel") } })
+    }
+    deleteChoice?.let { (target, everyone) ->
+        AlertDialog(onDismissRequest = { deleteChoice = null },
+            title = { Text(if (everyone) "Delete for everyone?" else "Delete for me?") },
+            text = { Text(if (everyone)
+                "The delete request will retry when connected. Other devices must support this update; saved copies and screenshots cannot be recalled."
+                else "This only removes the message from this device.") },
+            confirmButton = { Button(onClick = {
+                try {
+                    if (everyone) MessageMutations.deleteForEveryone(target)
+                    else FamilyStore.deleteForMe(target.id)
+                    deleteChoice = null
+                } catch (e: Exception) {
+                    FamilyStore.lastError = e.message ?: "Unable to delete message"
+                }
+            }) { Text("Delete") } },
+            dismissButton = { TextButton(onClick = { deleteChoice = null }) { Text("Cancel") } })
+    }
     var locationPreview by remember { mutableStateOf<String?>(null) }
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
@@ -843,6 +933,39 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
             requestLocation() else FamilyStore.lastError = "Location permission was declined."
     }
 
+    if (attachmentSheet) ModalBottomSheet(onDismissRequest = { attachmentSheet = false },
+        containerColor = surface, shape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp)) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Attach", fontWeight = FontWeight.SemiBold, fontSize = 18.sp,
+                modifier = Modifier.padding(bottom = 7.dp))
+            @Composable fun AttachmentChoice(name: String, icon: androidx.compose.ui.graphics.vector.ImageVector,
+                                              select: () -> Unit) {
+                Row(Modifier.fillMaxWidth().clickable { attachmentSheet = false; select() }
+                    .padding(vertical = 12.dp, horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Icon(icon, name, tint = accent, modifier = Modifier.size(24.dp))
+                    Spacer(Modifier.width(19.dp))
+                    Text(name, color = ink, fontSize = 16.sp)
+                }
+            }
+            AttachmentChoice("Photos", Icons.Outlined.Photo) { selectMedia.launch(arrayOf("image/*")) }
+            AttachmentChoice("Videos", Icons.Outlined.Videocam) { selectMedia.launch(arrayOf("video/*")) }
+            AttachmentChoice("Documents and files", Icons.Outlined.InsertDriveFile) {
+                selectMedia.launch(arrayOf("*/*"))
+            }
+            AttachmentChoice("Location (one-time)", Icons.Outlined.LocationOn) {
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+                    PackageManager.PERMISSION_GRANTED ||
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+                    PackageManager.PERMISSION_GRANTED) requestLocation()
+                else locationPermission.launch(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION,
+                    Manifest.permission.ACCESS_FINE_LOCATION))
+            }
+            AttachmentChoice("Camera", Icons.Outlined.CameraAlt) { launchCamera() }
+            Spacer(Modifier.height(20.dp))
+        }
+    }
     if (locationPreview != null) {
         AlertDialog(onDismissRequest = { locationPreview = null },
             title = { Text("Share your location?") },
@@ -903,7 +1026,7 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
                             topEnd = if (msg.outgoing) 3.dp else 12.dp,
                             bottomStart = 12.dp, bottomEnd = 12.dp
                         )).padding(horizontal = 11.dp, vertical = 8.dp)) {
-                        val attachment = AttachmentTransport.parse(msg.text)
+                        val attachment = if (msg.deletedForEveryone) null else AttachmentTransport.parse(msg.text)
                         val quoted = if (attachment == null && msg.text.startsWith("↪ ") && msg.text.contains("\n\n"))
                             msg.text.substringAfter("↪ ").substringBefore("\n\n") else null
                         if (quoted != null) {
@@ -931,12 +1054,25 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
                                     ChatImageThumbnail(attachment, modifier = Modifier.clickable {
                                         viewedMedia = attachment
                                     })
-                                } else {
+                                } else if (attachment.mime.startsWith("video/")) {
                                     Box(Modifier.size(width = 210.dp, height = 110.dp)
                                         .background(Color(0xFF2A3942), RoundedCornerShape(8.dp))
                                         .clickable { viewedMedia = attachment },
                                         contentAlignment = Alignment.Center) {
                                         Icon(Icons.Outlined.Videocam, "Play video", tint = accent)
+                                    }
+                                } else {
+                                    Row(Modifier.widthIn(max = 250.dp).clickable {
+                                        try { AttachmentTransport.open(context, attachment) }
+                                        catch (e: Exception) {
+                                            FamilyStore.lastError = "Cannot open file: " + (e.message ?: "No compatible app")
+                                        }
+                                    }.padding(vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Outlined.InsertDriveFile, "Open document",
+                                            tint = accent, modifier = Modifier.size(38.dp))
+                                        Spacer(Modifier.width(12.dp))
+                                        Text("Open document", color = textColor, fontSize = 13.sp)
                                     }
                                 }
                                 Text(attachment.name, color = textColor, fontSize = 12.sp, maxLines = 1,
@@ -944,6 +1080,9 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
                                 Text(((attachment.size + 1023) / 1024).toString() + " KB",
                                     color = muted, fontSize = 10.sp)
                             }
+                        } else if (msg.deletedForEveryone) {
+                            Text("This message was deleted", color = muted, fontSize = 14.sp,
+                                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
                         } else if (msg.text.startsWith("Location: https://www.google.com/maps?q=")) {
                             ChatLocationPreview(msg.text.removePrefix("Location: ")) {
                                 try {
@@ -955,6 +1094,11 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
                             }
                         } else Text(if (quoted != null) msg.text.substringAfter("\n\n") else msg.text,
                             color = textColor, fontSize = 15.sp, lineHeight = 20.sp)
+                        if (msg.editedAt > 0 && !msg.deletedForEveryone)
+                            Text("edited", color = muted, fontSize = 10.sp)
+                        MessageMutations.pendingLabels[msg.id]?.let { sync ->
+                            Text(sync, color = muted, fontSize = 10.sp)
+                        }
                         val reactions = MessageReactions.summary(msg.id)
                         if (reactions.isNotBlank()) Text(reactions, color = textColor)
                         Row(Modifier.align(Alignment.End), horizontalArrangement = Arrangement.End,
@@ -1017,18 +1161,17 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
                         }
                     }
                 )
-                IconButton(modifier = Modifier.size(36.dp),
-                    enabled = !sendingMedia,
-                    onClick = { selectMedia.launch(arrayOf("image/*", "video/*")) }) {
-                    Icon(Icons.Outlined.AttachFile, "Attach photos or videos", tint = muted)
+                IconButton(modifier = Modifier.size(40.dp),
+                    enabled = !sendingMedia, onClick = { attachmentSheet = true }) {
+                    Icon(Icons.Outlined.AttachFile, "Choose attachment type", tint = muted)
                 }
-                IconButton(modifier = Modifier.size(36.dp), enabled = !sendingMedia,
+                IconButton(modifier = Modifier.size(40.dp), enabled = !sendingMedia,
                     onClick = { launchCamera() }) {
                     Icon(Icons.Outlined.CameraAlt, "Take photo", tint = muted)
                 }
             }
             Spacer(Modifier.width(7.dp))
-            FilledIconButton(modifier = Modifier.size(49.dp),
+            FilledIconButton(modifier = Modifier.size(48.dp),
                 colors = IconButtonDefaults.filledIconButtonColors(containerColor = accent, contentColor = bg),
                 enabled = !sendingMedia,
                 onClick = {
@@ -1103,6 +1246,19 @@ private fun SettingsPage(networkStatus: VpnConnectionStatus, onRecordings: () ->
         HorizontalDivider(color = Color(0xFF24415C))
         VpnSettings()
         FamilyPinSettings()
+        OutlinedButton(onClick = {
+            try {
+                context.startActivity(Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+                    .putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, "familytouch_status_silent_v3"))
+            } catch (_: Exception) {
+                context.startActivity(Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName))
+            }
+        }) { Text("Connection notification settings") }
+        Text("The private connection uses an Android foreground service. Its notification is minimized and silent; Android may still show a service indicator.",
+            color = muted, fontSize = 12.sp)
+        ChatBackupPanel()
         OutlinedButton(onClick = onRecordings) { Text("Local call recordings") }
         Button(onClick = { FamilyUpdates.checkNow() }, colors = ButtonDefaults.buttonColors(
             containerColor = accent, contentColor = bg)) { Text("Check for updates") }

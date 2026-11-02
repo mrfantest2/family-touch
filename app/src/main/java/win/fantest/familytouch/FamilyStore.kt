@@ -14,7 +14,8 @@ import java.util.UUID
 
 data class Peer(val id: String, val name: String, val ip: String, val secret: String)
 data class ChatItem(val id: String, val peerId: String, val outgoing: Boolean, val text: String, val time: Long, val delivered: Boolean,
-    val senderId: String = "", val sent: Boolean = delivered, val read: Boolean = false)
+    val senderId: String = "", val sent: Boolean = delivered, val read: Boolean = false,
+    val editedAt: Long = 0L, val deletedForEveryone: Boolean = false)
 data class CallInvite(val peerId: String, val isVideo: Boolean, val offer: String = "", val outgoing: Boolean = false,
     val sessionId: String = "")
 data class CallLogRecord(val id: String, val peerId: String, val isVideo: Boolean, val outgoing: Boolean,
@@ -119,7 +120,8 @@ object FamilyStore {
             val arr = JSONArray(p.getString("messages", "[]"))
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
-                chat.add(ChatItem(o.getString("id"), o.getString("peer"), o.getBoolean("outgoing"), o.getString("text"), o.getLong("time"), o.optBoolean("delivered", true), o.optString("senderId"), o.optBoolean("sent", o.optBoolean("delivered", true)), o.optBoolean("read")))
+                chat.add(ChatItem(o.getString("id"), o.getString("peer"), o.getBoolean("outgoing"), o.getString("text"), o.getLong("time"), o.optBoolean("delivered", true), o.optString("senderId"), o.optBoolean("sent", o.optBoolean("delivered", true)), o.optBoolean("read"),
+                    o.optLong("editedAt", 0L), o.optBoolean("deletedForEveryone", false)))
             }
         } catch (_: Exception) { lastError = "Some messages could not be loaded" }
         try {
@@ -228,11 +230,59 @@ object FamilyStore {
         if (changed) persistMessages()
     }
 
+    /** Local-only action; never claims a remote deletion. */
+    fun deleteForMe(messageId: String): Boolean {
+        val removed = chat.removeAll { it.id == messageId }
+        if (removed) persistMessages()
+        return removed
+    }
+
+    /** Clear the visible conversation on this device only. */
+    fun clearConversation(peerId: String): Int {
+        val before = chat.size
+        chat.removeAll { it.peerId == peerId }
+        if (chat.size != before) persistMessages()
+        return before - chat.size
+    }
+
+    fun editMessageLocal(id: String, replacement: String, version: Long): Boolean {
+        val index = chat.indexOfFirst { it.id == id }
+        if (index < 0 || chat[index].deletedForEveryone ||
+            chat[index].editedAt >= version || replacement.length !in 1..6000) return false
+        chat[index] = chat[index].copy(text = replacement, editedAt = version)
+        persistMessages()
+        return true
+    }
+
+    fun deleteForEveryoneLocal(id: String, version: Long): Boolean {
+        val index = chat.indexOfFirst { it.id == id }
+        if (index < 0 || chat[index].editedAt > version) return false
+        chat[index] = chat[index].copy(text = "", deletedForEveryone = true, editedAt = version)
+        persistMessages()
+        return true
+    }
+
+    /** Backup import is merge-only and never overwrites device identity or credentials. */
+    fun mergeBackupMessages(items: List<ChatItem>): Int {
+        require(items.size <= 5000)
+        val existing = chat.map { it.id }.toMutableSet()
+        var count = 0
+        for (item in items) {
+            if (chat.size >= 5000) break
+            if (item.id.length !in 8..100 || item.peerId.isBlank() ||
+                item.text.length > 6000 || item.time !in 1..(System.currentTimeMillis() + 300_000L)) continue
+            if (existing.add(item.id)) { chat.add(item); count++ }
+        }
+        if (count > 0) persistMessages()
+        return count
+    }
+
     private fun persistMessages() {
         val a = JSONArray()
         chat.forEach { m -> a.put(JSONObject().put("id", m.id).put("peer", m.peerId).put("outgoing", m.outgoing)
             .put("text", m.text).put("time", m.time).put("delivered", m.delivered).put("senderId", m.senderId)
-            .put("sent", m.sent).put("read", m.read)) }
+            .put("sent", m.sent).put("read", m.read)
+            .put("editedAt", m.editedAt).put("deletedForEveryone", m.deletedForEveryone)) }
         context.getSharedPreferences("identity", Context.MODE_PRIVATE).edit().putString("messages", a.toString()).apply()
     }
 }
