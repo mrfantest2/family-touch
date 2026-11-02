@@ -24,6 +24,11 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -33,6 +38,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -51,6 +57,9 @@ import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Videocam
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.EmojiEmotions
+import androidx.compose.material.icons.outlined.CameraAlt
 import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.AttachFile
@@ -84,11 +93,11 @@ import java.util.UUID
 import java.util.Locale
 import java.io.ByteArrayOutputStream
 
-private val bg = Color(0xFFF7FAF8)
-private val surface = Color(0xFFFFFFFF)
-private val accent = Color(0xFF008F56)
-private val ink = Color(0xFF142722)
-private val muted = Color(0xFF667670)
+private val bg = Color(0xFF0B141A)
+private val surface = Color(0xFF202C33)
+private val accent = Color(0xFF00A884)
+private val ink = Color(0xFFE9EDEF)
+private val muted = Color(0xFF8696A0)
 
 class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
@@ -100,7 +109,7 @@ class MainActivity : ComponentActivity() {
         handleCallNotificationAction(intent)
     }
     override fun onStart() { super.onStart(); FamilyStore.appVisible = true }
-    override fun onStop() { FamilyStore.appVisible = false; super.onStop() }
+    override fun onStop() { FamilyStore.appVisible = false; FamilyPin.lock(); super.onStop() }
 
     private val askPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {}
     private var pendingCallAction: (() -> Unit)? = null
@@ -159,11 +168,11 @@ class MainActivity : ComponentActivity() {
         }
         // Standard app: light/white header uses dark Android system icons.
         // Admin's separate branch above retains its existing system-bar behavior.
-        window.statusBarColor = android.graphics.Color.WHITE
-        window.navigationBarColor = android.graphics.Color.WHITE
+        window.statusBarColor = android.graphics.Color.rgb(32,44,51)
+        window.navigationBarColor = android.graphics.Color.rgb(11,20,26)
         androidx.core.view.WindowInsetsControllerCompat(window, window.decorView).apply {
-            isAppearanceLightStatusBars = true
-            isAppearanceLightNavigationBars = true
+            isAppearanceLightStatusBars = false
+            isAppearanceLightNavigationBars = false
         }
         FamilyStore.init(this)
         GroupStore.init(this)
@@ -182,13 +191,15 @@ class MainActivity : ComponentActivity() {
         catch (ex: Exception) { FamilyStore.lastError = "Service: " + ex.message }
         if (!FamilyStore.needsNicknamePrompt) requestNotificationPermission()
         setContent {
-            MaterialTheme(colorScheme = lightColorScheme(
-                primary = accent, onPrimary = Color.White, background = bg, surface = surface, onBackground = ink, onSurface = ink,
-                secondary = accent, secondaryContainer = Color(0xFFDBF3E6),
-                onSecondaryContainer = ink, surfaceContainer = surface, surfaceVariant = Color(0xFFF0F7F2)
-            )) { Surface(modifier = Modifier.fillMaxSize(), color = bg, contentColor = ink) { Box { FamilyTouchUI(requestCallPermissions = { video, callback ->
-                withCallPermissions(video, callback)
-            }, onNicknameFinished = { requestNotificationPermission() }); FamilyUpdatePrompt() } } }
+            MaterialTheme(colorScheme = darkColorScheme(
+                primary = accent, onPrimary = Color(0xFF0B141A), background = bg, surface = surface, onBackground = ink, onSurface = ink,
+                secondary = accent, secondaryContainer = Color(0xFF173E37),
+                onSecondaryContainer = ink, surfaceContainer = surface, surfaceVariant = Color(0xFF2A3942)
+            )) { Surface(modifier = Modifier.fillMaxSize(), color = bg, contentColor = ink) { Box { FamilyPinGate {
+                FamilyTouchUI(requestCallPermissions = { video, callback -> withCallPermissions(video, callback) },
+                    onNicknameFinished = { requestNotificationPermission() })
+                FamilyUpdatePrompt()
+            } } } }
         }
     }
 }
@@ -197,6 +208,8 @@ class MainActivity : ComponentActivity() {
 private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit, onNicknameFinished: () -> Unit) {
     var tab by remember { mutableIntStateOf(0) }
     var recordingsLibrary by remember { mutableStateOf(false) }
+    var chatMenuExpanded by remember { mutableStateOf(false) }
+    var chatMenuAction by remember { mutableStateOf<String?>(null) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var networkStatus by remember { mutableStateOf(EmbeddedTailnet.status) }
@@ -231,34 +244,64 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
         networkStatus = EmbeddedTailnet.status
         delay(500)
     } }
+    val launchSelectedCall: (Boolean) -> Unit = { video ->
+        selectedPeer?.let { target ->
+            requestCallPermissions(video) {
+                try {
+                    val group = GroupStore.find(target.id)
+                    if (group != null) GroupCallController.start(group, video) else CallController.start(target, video)
+                } catch (e: Exception) { FamilyStore.lastError = e.message ?: "Cannot start call" }
+            }
+        }
+    }
     Column(Modifier.fillMaxSize().background(bg).navigationBarsPadding()) {
-        // Own the status bar inset inside the white top app bar. Android 15+
-        // draws behind the system bar, so a window flag alone is insufficient.
-        Surface(color = Color.White, shadowElevation = 1.dp) {
+        Surface(color = surface, shadowElevation = 1.dp) {
             Row(Modifier.fillMaxWidth().statusBarsPadding()
-                .padding(start = 18.dp, end = 16.dp, top = 11.dp, bottom = 11.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-            if (selectedPeer != null && active == null) IconButton(onClick = { FamilyStore.selectedPeer = null }) {
-                Icon(Icons.Outlined.ArrowBack, "Back")
-            } else {
-                SurfaceLogo()
-                Spacer(Modifier.width(11.dp))
-            }
-            Column(Modifier.weight(1f)) {
-                Text(selectedPeer?.name ?: "Family Touch", fontSize = 21.sp,
-                    fontWeight = FontWeight.Bold, color = ink)
-                Text(networkStatus.label, fontSize = 12.sp,
-                    color = if (networkStatus.connected) Color(0xFF067C4D) else Color(0xFF9A6619),
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            if (selectedPeer == null) Surface(
-                color = if (networkStatus.connected) Color(0xFFDEF5E8) else Color(0xFFFFF4E1),
-                shape = RoundedCornerShape(50.dp)) {
-                Text(if (networkStatus.connected) "Secure" else "Offline",
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                    color = if (networkStatus.connected) Color(0xFF08794B) else Color(0xFF9A6619),
-                    fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-            }
+                .padding(horizontal = 8.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (selectedPeer != null && active == null && tab == 0) {
+                    IconButton(onClick = { FamilyStore.selectedPeer = null }) {
+                        Icon(Icons.Outlined.ArrowBack, "Back", tint = ink)
+                    }
+                    Avatar(selectedPeer.name, FamilyStore.peerPhotos[selectedPeer.id], 39.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(selectedPeer.name, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
+                            color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(FamilyStore.presenceLabel(selectedPeer.id), color = muted, fontSize = 11.sp,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    IconButton(onClick = { launchSelectedCall(true) }, modifier = Modifier.size(40.dp)) {
+                        Icon(Icons.Outlined.Videocam, "Video call", tint = ink)
+                    }
+                    IconButton(onClick = { launchSelectedCall(false) }, modifier = Modifier.size(40.dp)) {
+                        Icon(Icons.Outlined.Call, "Voice call", tint = ink)
+                    }
+                    Box {
+                        IconButton(onClick = { chatMenuExpanded = true }, modifier = Modifier.size(40.dp)) {
+                            Icon(Icons.Outlined.MoreVert, "Conversation menu", tint = ink)
+                        }
+                        DropdownMenu(expanded = chatMenuExpanded, onDismissRequest = { chatMenuExpanded = false }) {
+                            DropdownMenuItem(text = { Text("Search conversation") }, onClick = {
+                                chatMenuExpanded = false; chatMenuAction = "search"
+                            })
+                            DropdownMenuItem(text = { Text("Shared media") }, onClick = {
+                                chatMenuExpanded = false; chatMenuAction = "media"
+                            })
+                            DropdownMenuItem(text = { Text("Chat security") }, onClick = {
+                                chatMenuExpanded = false; FamilyStore.selectedPeer = null; tab = 3
+                            })
+                        }
+                    }
+                } else {
+                    SurfaceLogo()
+                    Spacer(Modifier.width(11.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Family Touch", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = ink)
+                        Text(networkStatus.label, fontSize = 12.sp, color = if (networkStatus.connected) accent else muted,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    if (networkStatus.connected) Icon(Icons.Outlined.Wifi, "Private network connected", tint = accent)
+                }
             }
         }
         HorizontalDivider(color = Color(0xFFE5ECE7), thickness = 0.5.dp)
@@ -269,14 +312,8 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
         } else if (active != null) {
             CallPage(active, onHangup = { CallController.hangup() })
         } else if (selectedPeer != null && tab == 0) {
-            Conversation(peer = selectedPeer, onCall = { video ->
-                requestCallPermissions(video) {
-                    try {
-                        val group = GroupStore.find(selectedPeer.id)
-                        if (group != null) GroupCallController.start(group, video) else CallController.start(selectedPeer, video)
-                    } catch (e: Exception) { FamilyStore.lastError = e.message ?: "Cannot start call" }
-                }
-            })
+            Conversation(peer = selectedPeer, menuAction = chatMenuAction,
+                onMenuHandled = { chatMenuAction = null })
         } else {
             Box(Modifier.weight(1f)) {
                 when (tab) {
@@ -575,7 +612,7 @@ private fun PeerRow(peer: Peer, subtitle: String, onClick: () -> Unit, unread: I
 }
 
 @Composable
-private fun Avatar(name: String, photo: String? = null) {
+internal fun Avatar(name: String, photo: String? = null, avatarSize: androidx.compose.ui.unit.Dp = 48.dp) {
     val decoded = remember(photo) {
         try {
             if (photo.isNullOrEmpty()) null else {
@@ -584,7 +621,7 @@ private fun Avatar(name: String, photo: String? = null) {
             }
         } catch (_: Exception) { null }
     }
-    Box(Modifier.size(48.dp).clip(CircleShape).background(Color(0xFFCEEEDD)),
+    Box(Modifier.size(avatarSize).clip(CircleShape).background(Color(0xFF536A63)),
         contentAlignment = Alignment.Center) {
         if (decoded != null) Image(decoded, "Profile image", Modifier.fillMaxSize(),
             contentScale = ContentScale.Fit)
@@ -606,15 +643,23 @@ private fun EmptyState(title: String, subtitle: String) {
 }
 
 @Composable
-private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
+private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> Unit) {
     val group = GroupStore.find(peer.id)
     val scope = rememberCoroutineScope()
     var draft by remember(peer.id) { mutableStateOf("") }
+    var emojiPickerOpen by remember(peer.id) { mutableStateOf(false) }
     var replyTo by remember(peer.id) { mutableStateOf<ChatItem?>(null) }
     var actionMessage by remember(peer.id) { mutableStateOf<ChatItem?>(null) }
     var gallery by remember(peer.id) { mutableStateOf(false) }
     var searching by remember(peer.id) { mutableStateOf(false) }
     var query by remember(peer.id) { mutableStateOf("") }
+    LaunchedEffect(menuAction) {
+        when (menuAction) {
+            "search" -> searching = true
+            "media" -> gallery = true
+        }
+        if (menuAction != null) onMenuHandled()
+    }
     if (gallery) MediaGallery(peer.id) { gallery = false }
     actionMessage?.let { item -> AlertDialog(onDismissRequest = { actionMessage = null }, title = { Text("Message") },
         text = { Column {
@@ -690,6 +735,32 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
         }
     }
 
+    var captureUri by remember(peer.id) { mutableStateOf<Uri?>(null) }
+    val capture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { taken ->
+        val uri = captureUri
+        captureUri = null
+        if (taken && uri != null) {
+            sendingMedia = true
+            scope.launch {
+                try {
+                    if (group != null) GroupStore.sendMedia(group, listOf(uri))
+                    else AttachmentTransport.send(context, peer, listOf(uri)) { FamilyStore.addChat(it) }
+                } catch (e: Exception) { FamilyStore.lastError = "Photo transfer failed: " + e.message }
+                finally { sendingMedia = false }
+            }
+        }
+    }
+    val launchCamera: () -> Unit = {
+        try {
+            val dir = java.io.File(context.cacheDir, "family-camera").apply { mkdirs() }
+            val temp = java.io.File(dir, "capture-" + UUID.randomUUID() + ".jpg")
+            val uri = androidx.core.content.FileProvider.getUriForFile(context,
+                context.packageName + ".files", temp)
+            captureUri = uri
+            capture.launch(uri)
+        } catch (e: Exception) { FamilyStore.lastError = "Camera unavailable: " + e.message }
+    }
+
     val sendChat: (String) -> Boolean = { message ->
         val text = message.trim()
         if (text.isNotEmpty() && group != null) {
@@ -748,38 +819,75 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
                 TextButton(onClick = { locationPreview = null }) { Text("Cancel") }
             })
     }
-    Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(10.dp), horizontalArrangement = Arrangement.End) {
-            TextButton(onClick = { searching = !searching; if (!searching) query = "" }) { Text("Search") }
-            TextButton(onClick = { gallery = true }) { Text("Media") }
-            if (group != null) TextButton(onClick = {
+    Column(Modifier.fillMaxSize().background(bg)) {
+        if (searching) Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(query, { query = it.take(200) }, Modifier.weight(1f),
+                placeholder = { Text("Search this conversation") }, singleLine = true)
+            TextButton(onClick = { searching = false; query = "" }) { Text("Close") }
+        }
+        if (group != null) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            TextButton(onClick = {
                 if (group.owner == FamilyStore.deviceId) editGroup = true
                 else scope.launch {
                     try { GroupStore.leave(group); FamilyStore.selectedPeer = null }
                     catch (_: Exception) { FamilyStore.lastError = "Creator unavailable; try leaving again later" }
                 }
-            }) { Text(if (group.owner == FamilyStore.deviceId) "Members" else "Leave group") }
-            IconButton(onClick = { onCall(false) }) { Icon(Icons.Outlined.Call, "Voice call", tint = Color(0xFF54DDA6)) }
-            IconButton(onClick = { onCall(true) }) { Icon(Icons.Outlined.Videocam, "Video call", tint = accent) }
+            }) { Text(if (group.owner == FamilyStore.deviceId) "Members" else "Leave group", color = accent) }
         }
-        if (searching) OutlinedTextField(query, { query = it.take(200) }, Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-            placeholder = { Text("Search this conversation") }, singleLine = true)
         val history = FamilyStore.messages.filter { it.peerId == peer.id && (query.isBlank() || it.text.contains(query, ignoreCase = true)) }
-        LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(history, key = { it.id }) { msg ->
+        val chatScroll = rememberLazyListState()
+        var didInitialScroll by remember(peer.id) { mutableStateOf(false) }
+        LaunchedEffect(peer.id, history.size) {
+            if (history.isNotEmpty()) {
+                val nearBottom = chatScroll.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let {
+                    it >= history.size - 2
+                } ?: false
+                if (!didInitialScroll || nearBottom) chatScroll.scrollToItem(history.size)
+                didInitialScroll = true
+            }
+        }
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            DarkChatWallpaper(Modifier.matchParentSize())
+            LazyColumn(Modifier.fillMaxSize(), state = chatScroll, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                item(key = "chat-security") { DarkChatSecurityNotice() }
+                items(history, key = { it.id }) { msg ->
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = if (msg.outgoing) Arrangement.End else Arrangement.Start) {
-                    val textColor = if (msg.outgoing) Color.White else ink
-                    val secondaryColor = if (msg.outgoing) Color(0xFFBFDBEF) else muted
-                    val actionColor = if (msg.outgoing) Color(0xFFACE1FF) else accent
-                    Column(Modifier.widthIn(max = 300.dp).pointerInput(msg.id) { detectTapGestures(onLongPress = { actionMessage = msg }) }
-                        .background(if (msg.outgoing) Color(0xFF1268AE) else surface,
-                        RoundedCornerShape(16.dp)).padding(horizontal = 15.dp, vertical = 11.dp)) {
+                    val textColor = ink
+                    val secondaryColor = muted
+                    val actionColor = accent
+                    val bubbleColor = if (msg.outgoing) Color(0xFF005C4B) else surface
+                    if (!msg.outgoing) DarkChatTail(false, bubbleColor)
+                    Column(Modifier.widthIn(max = 310.dp)
+                        .pointerInput(msg.id) { detectTapGestures(onLongPress = { actionMessage = msg }) }
+                        .background(bubbleColor, RoundedCornerShape(
+                            topStart = if (msg.outgoing) 12.dp else 3.dp,
+                            topEnd = if (msg.outgoing) 3.dp else 12.dp,
+                            bottomStart = 12.dp, bottomEnd = 12.dp
+                        )).padding(horizontal = 11.dp, vertical = 8.dp)) {
                         val attachment = AttachmentTransport.parse(msg.text)
+                        val quoted = if (attachment == null && msg.text.startsWith("↪ ") && msg.text.contains("\n\n"))
+                            msg.text.substringAfter("↪ ").substringBefore("\n\n") else null
+                        if (quoted != null) {
+                            Row(Modifier.fillMaxWidth().background(
+                                Color(0xFF17262B).copy(alpha = .77f), RoundedCornerShape(6.dp))
+                                .padding(vertical = 6.dp)) {
+                                Box(Modifier.width(3.dp).height(38.dp).background(Color(0xFFB388EB)))
+                                Column(Modifier.padding(horizontal = 8.dp)) {
+                                    Text(if (msg.outgoing) "Reply" else peer.name, color = Color(0xFFCEB1F3),
+                                        fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                    Text(quoted, color = muted, maxLines = 2, fontSize = 12.sp,
+                                        overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                            Spacer(Modifier.height(5.dp))
+                        }
                         if (group != null && !msg.outgoing) Text(FamilyStore.find(msg.senderId)?.name ?: "Family member", fontSize = 11.sp, color = secondaryColor)
                         if (attachment != null) {
                             if (attachment.mime.startsWith("audio/")) {
-                                VoiceMessagePlayer(attachment, textColor)
+                                VoiceMessagePlayer(attachment, textColor,
+                                    senderName = if (msg.outgoing) FamilyStore.nickname else peer.name,
+                                    senderPhoto = if (msg.outgoing) FamilyStore.profilePhoto else FamilyStore.peerPhotos[peer.id])
                             } else {
                                 Text((if (attachment.mime.startsWith("image/")) "Photo" else "Video") +
                                     " · " + attachment.name, color = textColor, maxLines = 2)
@@ -799,59 +907,84 @@ private fun Conversation(peer: Peer, onCall: (Boolean) -> Unit) {
                                         FamilyStore.lastError = "No maps app or browser available"
                                     }
                                 })
-                        } else Text(msg.text, color = textColor)
+                        } else Text(if (quoted != null) msg.text.substringAfter("\n\n") else msg.text,
+                            color = textColor, fontSize = 15.sp, lineHeight = 20.sp)
                         val reactions = MessageReactions.summary(msg.id)
                         if (reactions.isNotBlank()) Text(reactions, color = textColor)
-                        Text(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(msg.time)),
-                            color = secondaryColor, fontSize = 10.sp)
-                        if (msg.outgoing) Text(if (group != null) (if (msg.delivered) "Delivered" else GroupStore.delivery(msg.id) ?: "Queued")
-                            else MessageDelivery.label(msg.sent, msg.delivered, msg.read),
-                            color = secondaryColor, fontSize = 10.sp)
+                        Row(Modifier.align(Alignment.End), horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Text(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(msg.time)),
+                                color = secondaryColor, fontSize = 10.sp)
+                            if (msg.outgoing) {
+                                Spacer(Modifier.width(4.dp))
+                                DarkChatReceipt(msg.sent, msg.delivered, msg.read)
+                            }
+                        }
                     }
+                    if (msg.outgoing) DarkChatTail(true, bubbleColor)
                 }
             }
+            }
         }
-        replyTo?.let { item -> Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        replyTo?.let { item -> Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp)
+            .background(surface, RoundedCornerShape(9.dp)).padding(horizontal = 9.dp),
+            verticalAlignment = Alignment.CenterVertically) {
             Text("Replying to: " + (AttachmentTransport.parse(item.text)?.name ?: item.text).take(140), Modifier.weight(1f), maxLines = 2)
             TextButton(onClick = { replyTo = null }) { Text("Cancel") }
         } }
-        Row(Modifier.fillMaxWidth().background(Color.White).padding(horizontal = 8.dp, vertical = 9.dp),
-            verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = {
-                if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
-                    voiceNote = true else voicePermission.launch(Manifest.permission.RECORD_AUDIO)
-            }, enabled = !sendingMedia) { Icon(Icons.Outlined.Mic, "Record voice note", tint = accent) }
-            IconButton(onClick = { selectMedia.launch(arrayOf("image/*", "video/*")) },
-                enabled = !sendingMedia) {
-                Icon(Icons.Outlined.AttachFile, "Attach up to 10 photos or videos", tint = accent)
+        Row(Modifier.fillMaxWidth().background(bg).padding(horizontal = 6.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.Bottom) {
+            Row(Modifier.weight(1f).background(Color(0xFF2A3942), RoundedCornerShape(27.dp))
+                .heightIn(min = 50.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box {
+                    IconButton(modifier = Modifier.size(40.dp), onClick = { emojiPickerOpen = true }) {
+                        Icon(Icons.Outlined.EmojiEmotions, "Insert emoji", tint = muted)
+                    }
+                    DropdownMenu(expanded = emojiPickerOpen, onDismissRequest = { emojiPickerOpen = false }) {
+                        listOf("🙂", "❤️", "👍", "😂", "🙏", "🎉").forEach { choice ->
+                            DropdownMenuItem(text = { Text(choice, fontSize = 19.sp) }, onClick = {
+                                draft = (draft + choice).take(6000); emojiPickerOpen = false
+                            })
+                        }
+                    }
+                }
+                androidx.compose.foundation.text.BasicTextField(
+                    value = draft, onValueChange = { draft = it.take(6000) },
+                    modifier = Modifier.weight(1f).padding(vertical = 12.dp),
+                    textStyle = androidx.compose.ui.text.TextStyle(color = ink, fontSize = 15.sp),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(accent),
+                    maxLines = 5,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { submitDraft() }),
+                    decorationBox = { inner ->
+                        Box(contentAlignment = Alignment.CenterStart) {
+                            if (draft.isBlank()) Text("Message", color = muted, fontSize = 15.sp)
+                            inner()
+                        }
+                    }
+                )
+                IconButton(modifier = Modifier.size(36.dp),
+                    enabled = !sendingMedia,
+                    onClick = { selectMedia.launch(arrayOf("image/*", "video/*")) }) {
+                    Icon(Icons.Outlined.AttachFile, "Attach photos or videos", tint = muted)
+                }
+                IconButton(modifier = Modifier.size(36.dp), enabled = !sendingMedia,
+                    onClick = { launchCamera() }) {
+                    Icon(Icons.Outlined.CameraAlt, "Take photo", tint = muted)
+                }
             }
-            IconButton(onClick = {
-                if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
-                    PackageManager.PERMISSION_GRANTED) requestLocation()
-                else locationPermission.launch(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION))
-            }, enabled = !locationBusy) {
-                Icon(Icons.Outlined.LocationOn, "Share one-time location", tint = accent)
-            }
-            OutlinedTextField(value = draft, onValueChange = { draft = it.take(6000) },
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("Message", color = muted) },
-                textStyle = androidx.compose.ui.text.TextStyle(color = ink, fontSize = 16.sp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = ink, unfocusedTextColor = ink,
-                    focusedContainerColor = Color.White, unfocusedContainerColor = Color.White,
-                    cursorColor = accent, focusedBorderColor = accent,
-                    unfocusedBorderColor = Color(0xFFB6CFC3),
-                    focusedPlaceholderColor = muted, unfocusedPlaceholderColor = muted,
-                    selectionColors = androidx.compose.foundation.text.selection.TextSelectionColors(
-                        handleColor = accent, backgroundColor = Color(0xFFB8E7D0)
-                    )
-                ),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { submitDraft() }),
-                shape = RoundedCornerShape(24.dp), maxLines = 5)
-            Spacer(Modifier.width(6.dp))
-            FilledIconButton(enabled = draft.isNotBlank(), onClick = { submitDraft() }) {
-                Icon(Icons.Outlined.Send, "Send")
+            Spacer(Modifier.width(7.dp))
+            FilledIconButton(modifier = Modifier.size(49.dp),
+                colors = IconButtonDefaults.filledIconButtonColors(containerColor = accent, contentColor = bg),
+                enabled = !sendingMedia,
+                onClick = {
+                    if (draft.isNotBlank()) submitDraft()
+                    else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
+                        voiceNote = true else voicePermission.launch(Manifest.permission.RECORD_AUDIO)
+                }) {
+                Icon(if (draft.isNotBlank()) Icons.Outlined.Send else Icons.Outlined.Mic,
+                    if (draft.isNotBlank()) "Send message" else "Record voice note",
+                    modifier = Modifier.size(24.dp))
             }
         }
     }
@@ -915,6 +1048,7 @@ private fun SettingsPage(networkStatus: VpnConnectionStatus, onRecordings: () ->
             color = muted, fontSize = 12.sp)
         HorizontalDivider(color = Color(0xFF24415C))
         VpnSettings()
+        FamilyPinSettings()
         OutlinedButton(onClick = onRecordings) { Text("Local call recordings") }
         OutlinedButton(onClick = { FamilyUpdates.checkNow() }) { Text("Check for updates") }
         HorizontalDivider(color = Color(0xFF24415C))
