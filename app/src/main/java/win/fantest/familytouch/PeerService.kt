@@ -40,6 +40,7 @@ class PeerService : Service() {
         Tailnet.init(this)
         PeerOutbox.init(this)
         MessageReactions.init(this)
+        MessageMutations.init(this)
         CallController.init(this)
         GroupCallController.init(this)
         CallRecordingEngine.init(this)
@@ -133,8 +134,12 @@ class PeerService : Service() {
         val connected = EmbeddedTailnet.status.connected
         return NotificationCompat.Builder(this, channel)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
-            .setContentTitle(if (connected) "Family Touch connected" else "Family Touch private connection")
-            .setContentText(if (connected) "Private messages and calls ready" else EmbeddedTailnet.status.label)
+            .setContentTitle("Family Touch")
+            .setContentText(if (connected) "Private connection active" else "Private connection unavailable")
+            .setShowWhen(false)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_DEFERRED)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setSilent(true)
@@ -260,7 +265,7 @@ class PeerService : Service() {
                             }
                             JSONObject()
                         }
-                        "presence" -> JSONObject().put("protocol", 4).put("status", when {
+                        "presence" -> JSONObject().put("protocol", 5).put("status", when {
                             FamilyStore.activeCall != null || GroupCallController.session != null -> "on_call"
                             FamilyStore.appVisible -> "available"
                             else -> "away"
@@ -285,6 +290,10 @@ class PeerService : Service() {
                         }
                         "message_reaction" -> {
                             kotlinx.coroutines.withContext(Dispatchers.Main) { MessageReactions.receive(id, json) }
+                            JSONObject()
+                        }
+                        "message_mutation" -> {
+                            kotlinx.coroutines.withContext(Dispatchers.Main) { MessageMutations.receive(id, json) }
                             JSONObject()
                         }
                         "group_call_invite", "group_call_join", "group_call_join_ack", "group_call_offer", "group_call_answer", "group_call_ice", "group_call_leave" -> {
