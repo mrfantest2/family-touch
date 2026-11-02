@@ -49,7 +49,7 @@ internal fun VpnSettings() {
         val preferences = context.getSharedPreferences("vpn", Context.MODE_PRIVATE)
         if (!preferences.getBoolean("initialConsentRequested", false)) {
             preferences.edit().putBoolean("initialConsentRequested", true).apply()
-            if (!EmbeddedTailnet.serviceActive) {
+            if (!EmbeddedTailnet.serviceActive && !EmbeddedTailnet.status.connected) {
                 val intent = VpnService.prepare(context)
                 if (intent != null) consent.launch(intent) else start()
             }
@@ -64,8 +64,12 @@ internal fun VpnSettings() {
     Text("Family network", style = MaterialTheme.typography.titleLarge)
     val inCall = FamilyStore.activeCall != null || FamilyStore.incomingCall != null ||
         GroupCallController.session != null || GroupCallController.incoming != null
-    Text("Built-in private VPN", style = MaterialTheme.typography.titleMedium)
-    Text("Family Touch manages its own private connection. No separate VPN app needed.",
+    val reusingExternalVpn = status.connected && !active
+    Text(if (reusingExternalVpn) "Existing Tailscale VPN connected" else "Built-in private VPN",
+        style = MaterialTheme.typography.titleMedium)
+    Text(if (reusingExternalVpn)
+        "Family Touch is using your already connected Tailscale network. This does not replace the current VPN."
+        else "One built-in Tailscale connection for Family Touch and other Android apps on your approved tailnet.",
         style = MaterialTheme.typography.bodySmall)
     Text(status.label, color = if (status.connected) androidx.compose.ui.graphics.Color(0xFF5DDAA7)
         else MaterialTheme.colorScheme.onSurface)
@@ -80,7 +84,7 @@ internal fun VpnSettings() {
             val intent = VpnService.prepare(context)
             if (intent != null) consent.launch(intent) else start()
         }
-    }) { Text(if (active) "Disconnect" else "Connect") }
+    }) { Text(if (active) "Disconnect" else if (reusingExternalVpn) "Switch to Family Touch VPN" else "Connect") }
     Text("Android may request VPN permission; only one VPN can run at a time.",
         style = MaterialTheme.typography.bodySmall)
     if (notice.isNotEmpty()) Text(notice)

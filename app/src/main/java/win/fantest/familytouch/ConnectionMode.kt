@@ -25,7 +25,11 @@ internal object FamilyNetworkMode {
         check(context.getSharedPreferences("vpn", Context.MODE_PRIVATE).edit().putString("mode", mode.key).commit())
     }
     fun installed(context: Context) = runCatching { context.packageManager.getPackageInfo(CLIENT, 0); true }.getOrDefault(false)
-    fun externalStatus(context: Context) = ExternalVpnPolicy.status(installed(context), Tailnet.vpnIp(context))
+    fun externalStatus(context: Context): VpnConnectionStatus {
+        val privateAddress = Tailnet.vpnIp(context)
+        // A live tailnet VPN is authoritative even when Android package visibility hides the client.
+        return ExternalVpnPolicy.status(privateAddress != null || installed(context), privateAddress)
+    }
     fun openExternal(context: Context) {
         val intent = context.packageManager.getLaunchIntentForPackage(CLIENT)
             ?: Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$CLIENT"))

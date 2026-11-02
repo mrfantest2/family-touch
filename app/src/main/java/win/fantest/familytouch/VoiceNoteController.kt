@@ -84,6 +84,20 @@ internal fun VoiceNoteDialog(onDismiss: () -> Unit, onSend: (Uri, (Boolean) -> U
     var sending by remember { mutableStateOf(false) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     fun cancel() { player?.release(); player = null; controller.cancel(); onDismiss() }
+    fun sendRecorded() {
+        try {
+            player?.release(); player = null
+            val uri = controller.uri()
+            sending = true
+            onSend(uri) { success ->
+                sending = false
+                if (success) cancel() else failure = "Transfer failed. Tap Send to retry."
+            }
+        } catch (e: Exception) {
+            sending = false
+            failure = e.message ?: "Cannot send voice note"
+        }
+    }
     DisposableEffect(lifecycle) {
         val observer = object : DefaultLifecycleObserver {
             override fun onStop(owner: LifecycleOwner) { if (controller.recording) controller.cancel() }
@@ -102,23 +116,18 @@ internal fun VoiceNoteDialog(onDismiss: () -> Unit, onSend: (Uri, (Boolean) -> U
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(if (controller.recording) "Recording · ${controller.durationMs / 1000}s / 300s" else "Preview · ${controller.durationMs / 1000}s")
             if (failure.isNotEmpty()) Text(failure)
-            if (controller.recording) Button(onClick = { controller.stop() }) { Text("Stop recording") }
+            if (controller.recording) Button(enabled = !sending, onClick = {
+                controller.stop(); sendRecorded()
+            }) { Text("Stop & send") }
             else if (controller.file != null) OutlinedButton(enabled = !sending, onClick = {
                 player?.release()
                 player = MediaPlayer.create(context, Uri.fromFile(controller.file))?.apply { start() }
             }) { Text("Play preview") }
-            Text("Stored on your phone. Shared only when you tap Send.")
+            Text("Tap Stop & send to finish. Cancel discards the recording.")
         }
     }, confirmButton = {
         Button(enabled = !sending && !controller.recording && controller.file != null, onClick = {
-            try {
-                player?.release(); player = null
-                val uri = controller.uri(); sending = true
-                onSend(uri) { success ->
-                    sending = false
-                    if (success) cancel() else failure = "Transfer failed. Your voice note is ready to retry."
-                }
-            } catch (e: Exception) { sending = false; failure = e.message ?: "Cannot send voice note" }
+            sendRecorded()
         }) { Text(if (sending) "Sending…" else "Send") }
     }, dismissButton = { TextButton(enabled = !sending, onClick = { cancel() }) { Text("Cancel") } })
 }

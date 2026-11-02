@@ -98,6 +98,11 @@ internal object EmbeddedTailnet {
             return if (context != null && FamilyNetworkMode.selected(context) == ConnectionMode.EXTERNAL) {
                 if (serviceActive || stopping) VpnConnectionStatus("Switching connection mode")
                 else FamilyNetworkMode.externalStatus(context)
+            } else if (context != null && !serviceActive && !stopping &&
+                !internalStatus.connected && Tailnet.vpnIp(context) != null) {
+                // Reuse an already active Tailscale VPN without replacing its Android VPN owner.
+                // Family Touch can still become the system VPN when the user explicitly connects it.
+                FamilyNetworkMode.externalStatus(context)
             } else internalStatus
         }
         set(value) { internalStatus = value }

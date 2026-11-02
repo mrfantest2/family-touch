@@ -152,8 +152,8 @@ class FamilyVpnService : VpnService(), libtailscale.IPNService {
         if (!status && EmbeddedTailnet.status.connected) EmbeddedTailnet.status = VpnConnectionStatus("Reconnecting")
     }
     override fun newBuilder(): libtailscale.VPNServiceBuilder {
+        // Share approved tailnet routes with all Android apps. Android still supports only one VPN at a time.
         val builder = Builder().setSession("Family Touch").setMtu(1280).setMetered(false)
-            .addAllowedApplication(packageName)
             .setConfigureIntent(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE))
         return object : libtailscale.VPNServiceBuilder {
             override fun setMTU(mtu: Int) { builder.setMtu(mtu) }
