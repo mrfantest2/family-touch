@@ -12,8 +12,8 @@ android {
         applicationId = "win.fantest.familytouch"
         minSdk = 29
         targetSdk = 36
-        versionCode = 34
-        versionName = "0.3.17-resumable-updates"
+        versionCode = 36
+        versionName = "0.3.19-background-updater-verification"
         buildConfigField("boolean", "EMBEDDED_VPN", "true")
         buildConfigField("boolean", "ADMIN_APP", "false")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -93,6 +93,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("io.github.webrtc-sdk:android:150.7871.01")
     testImplementation("junit:junit:4.13.2")

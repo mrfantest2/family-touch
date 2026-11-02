@@ -10,6 +10,15 @@ import android.net.Uri
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.Observer
+import androidx.work.Constraints
+import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.BackoffPolicy
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
+import androidx.work.workDataOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
@@ -25,6 +34,7 @@ import org.json.JSONObject
 import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
+import java.net.URI
 import java.util.concurrent.TimeUnit
 
 internal data class AvailableFamilyUpdate(
@@ -32,7 +42,8 @@ internal data class AvailableFamilyUpdate(
     val name: String,
     val bytes: Long,
     val checksum: String,
-    val url: String
+    val url: String,
+    val mirrors: List<String> = emptyList()
 )
 
 /** Self-update checks are HTTPS only. Installer signatures must match the installed app. */
@@ -43,6 +54,83 @@ internal object FamilyUpdates {
     private val http = OkHttpClient.Builder().connectTimeout(9, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS).followRedirects(false).build()
     private const val HOST = "https://family-updates.fantest.win"
+    internal fun isAllowedDownloadUrl(url: String): Boolean = try {
+        val uri = URI(url)
+        if (uri.scheme != "https" || uri.userInfo != null || uri.fragment != null) false
+        else when (uri.host?.lowercase()) {
+            "family-updates.fantest.win" -> uri.path.startsWith("/apks/") && uri.path.endsWith(".apk")
+            "drive.google.com" -> uri.path == "/uc" || uri.path.startsWith("/file/d/")
+            "drive.usercontent.google.com" -> uri.path == "/download"
+            else -> uri.host?.lowercase()?.endsWith(".googleusercontent.com") == true
+        }
+    } catch (_: Exception) { false }
+
+    fun workName(code: Long): String = "family-touch-update-" + code
+
+    fun partialFile(context: Context, update: AvailableFamilyUpdate): File =
+        File(File(context.filesDir, "updates").also { it.mkdirs() },
+            "family-touch-" + update.code + "-" + update.checksum.take(12) + ".partial")
+
+    fun targetFile(context: Context, update: AvailableFamilyUpdate): File =
+        File(File(context.filesDir, "updates").also { it.mkdirs() },
+            "family-touch-" + update.code + "-" + update.checksum.take(12) + ".apk")
+
+    fun enqueue(context: Context, update: AvailableFamilyUpdate) {
+        require(isAllowedDownloadUrl(update.url) && update.mirrors.all { isAllowedDownloadUrl(it) })
+        val input = workDataOf(
+            FamilyUpdateWorker.KEY_VERSION to update.code,
+            FamilyUpdateWorker.KEY_NAME to update.name,
+            FamilyUpdateWorker.KEY_SIZE to update.bytes,
+            FamilyUpdateWorker.KEY_SHA to update.checksum,
+            FamilyUpdateWorker.KEY_SOURCES to (listOf(update.url) + update.mirrors).toTypedArray()
+        )
+        val constraints = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+        val request = OneTimeWorkRequestBuilder<FamilyUpdateWorker>()
+            .setInputData(input)
+            .setConstraints(constraints)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.SECONDS)
+            .addTag("family-touch-signed-updater")
+            .build()
+        WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(
+            workName(update.code), ExistingWorkPolicy.KEEP, request)
+    }
+
+    fun markReady(context: Context, update: AvailableFamilyUpdate) {
+        context.getSharedPreferences("family_update_ready", Context.MODE_PRIVATE)
+            .edit().putLong("code", update.code).putString("sha", update.checksum)
+            .putLong("bytes", update.bytes).commit()
+    }
+
+    suspend fun verifiedReady(context: Context, update: AvailableFamilyUpdate): File? =
+        withContext(Dispatchers.IO) {
+            val prefs = context.getSharedPreferences("family_update_ready", Context.MODE_PRIVATE)
+            if (prefs.getLong("code", -1L) != update.code ||
+                prefs.getString("sha", "") != update.checksum ||
+                prefs.getLong("bytes", -1L) != update.bytes) return@withContext null
+            val file = targetFile(context, update)
+            if (!file.isFile || file.length() != update.bytes) return@withContext null
+            val digest = MessageDigest.getInstance("SHA-256")
+            file.inputStream().buffered().use { stream ->
+                val buffer = ByteArray(65536)
+                while (true) {
+                    val n = stream.read(buffer)
+                    if (n < 0) break
+                    digest.update(buffer, 0, n)
+                }
+            }
+            if (digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) } != update.checksum) {
+                file.delete()
+                return@withContext null
+            }
+            try {
+                verifyPackageAndSigner(context, file, update.code)
+                file
+            } catch (_: Exception) {
+                file.delete()
+                null
+            }
+        }
+
     private fun safeResponse(url: String, maxBytes: Int): ByteArray {
         if (!url.startsWith("$HOST/")) throw IOException("Untrusted update host")
         http.newCall(Request.Builder().url(url).header("Cache-Control","no-cache").build())
@@ -69,13 +157,31 @@ internal object FamilyUpdates {
         val code = j.getLong("versionCode")
         if (code <= BuildConfig.VERSION_CODE.toLong()) return@withContext null
         val url = j.getString("apkUrl")
-        if (!url.startsWith("$HOST/apks/") || !url.endsWith(".apk")) throw IOException("Untrusted APK URL")
+        if (!url.startsWith("$HOST/apks/") || !isAllowedDownloadUrl(url))
+            throw IOException("Untrusted APK URL")
         val hash = j.getString("sha256").lowercase()
         if (!Regex("[0-9a-f]{64}").matches(hash)) throw IOException("Invalid update checksum")
         val bytes = j.getLong("bytes")
         if (bytes !in 1..250_000_000L) throw IOException("Invalid update size")
-        AvailableFamilyUpdate(code, j.optString("versionName", "Latest version"), bytes, hash, url)
+        val mirrors = mutableListOf<String>()
+        val rawMirrors = j.optJSONArray("mirrorUrls")
+        if (rawMirrors != null) {
+            for (i in 0 until minOf(rawMirrors.length(), 3)) {
+                val candidate = rawMirrors.optString(i)
+                if (isAllowedDownloadUrl(candidate) && candidate != url && candidate !in mirrors) {
+                    mirrors.add(candidate)
+                }
+            }
+        }
+        AvailableFamilyUpdate(code, j.optString("versionName", "Latest version"), bytes, hash, url, mirrors)
     }
+    internal fun verifyPackageAndSigner(context: Context, file: File, version: Long) {
+        signerDigest(context, file)
+        val packageInfo = context.packageManager.getPackageArchiveInfo(file.absolutePath, 0)
+            ?: throw IOException("APK package invalid")
+        if (packageInfo.longVersionCode != version) throw IOException("APK version mismatch")
+    }
+
     private fun signerDigest(context: Context, file: File): String {
         val flags=PackageManager.GET_SIGNING_CERTIFICATES
         val pm=context.packageManager
@@ -94,93 +200,6 @@ internal object FamilyUpdates {
         if (fingerprints(oldSigners) != fingerprints(newSigners))
             throw IOException("Update signature does not match installed Family Touch")
         return fingerprints(newSigners).first()
-    }
-    /** SHA-256 bound resumable APK transfer. Uses small HTTP Range requests, retries
-     * transient connection resets, and preserves an incomplete download across app restarts.
-     * Neither the advertised checksum nor the APK signer can be bypassed.
-     */
-    suspend fun download(context: Context, update: AvailableFamilyUpdate,
-                         progress: (Int) -> Unit): File = withContext(Dispatchers.IO) {
-        val folder = File(context.cacheDir, "updates").also { it.mkdirs() }
-        val file = File(folder, "family-touch-update.apk")
-        val part = File(folder, "family-touch-" + update.code + "-" +
-            update.checksum.take(12) + ".partial")
-        if (part.exists() && part.length() > update.bytes) part.delete()
-        val digest = MessageDigest.getInstance("SHA-256")
-        val buffer = ByteArray(65536)
-        var received = 0L
-        if (part.exists()) {
-            part.inputStream().buffered().use { input ->
-                while (true) {
-                    val n = input.read(buffer)
-                    if (n < 0) break
-                    digest.update(buffer, 0, n)
-                    received += n
-                }
-            }
-            progress((received * 100 / update.bytes).toInt().coerceIn(0, 100))
-        }
-        var failuresWithoutCompletedChunk = 0
-        while (received < update.bytes) {
-            val startOffset = received
-            val endOffset = minOf(update.bytes - 1, received + 2_097_152L - 1)
-            try {
-                val request = Request.Builder().url(update.url)
-                    .header("Range", "bytes=" + startOffset + "-" + endOffset)
-                    .header("Cache-Control", "no-cache").build()
-                http.newCall(request).execute().use { response ->
-                    if (response.code != 206) throw IOException(
-                        "Update server requires partial downloads (HTTP " + response.code + ")")
-                    val expected = "bytes " + startOffset + "-" + endOffset + "/" + update.bytes
-                    if (response.header("Content-Range")?.trim() != expected)
-                        throw IOException("Update server returned an invalid byte range")
-                    val source = response.body?.byteStream() ?: throw IOException("No APK data")
-                    source.use { input ->
-                        java.io.FileOutputStream(part, true).buffered().use { output ->
-                            while (received <= endOffset) {
-                                val limit = minOf(buffer.size.toLong(), endOffset - received + 1).toInt()
-                                val n = input.read(buffer, 0, limit)
-                                if (n < 0) break
-                                output.write(buffer, 0, n)
-                                digest.update(buffer, 0, n)
-                                received += n
-                                progress((received * 100 / update.bytes).toInt().coerceIn(0, 100))
-                            }
-                        }
-                    }
-                    if (received != endOffset + 1) throw IOException(
-                        "Incomplete update chunk at byte " + received)
-                }
-                failuresWithoutCompletedChunk = 0
-            } catch (e: IOException) {
-                failuresWithoutCompletedChunk++
-                if (failuresWithoutCompletedChunk >= 8) {
-                    throw IOException(
-                        "Connection interrupted; tap Update now again to resume from " +
-                            (received * 100 / update.bytes) + "%. " + (e.message ?: ""), e)
-                }
-                delay(500L * failuresWithoutCompletedChunk)
-            }
-        }
-        val calculated = digest.digest().joinToString("") {
-            "%02x".format(it.toInt() and 255)
-        }
-        if (calculated != update.checksum || received != update.bytes) {
-            part.delete()
-            throw IOException("APK checksum mismatch; discarded incomplete update")
-        }
-        if (file.exists() && !file.delete()) throw IOException("Cannot replace old update cache")
-        if (!part.renameTo(file)) throw IOException("Cannot store verified APK")
-        try {
-            signerDigest(context, file)
-            val info = context.packageManager.getPackageArchiveInfo(file.path, 0)
-                ?: throw IOException("APK package invalid")
-            if (info.longVersionCode != update.code) throw IOException("APK version mismatch")
-            file
-        } catch (e: Exception) {
-            file.delete()
-            throw e
-        }
     }
     fun install(context:Context,file:File) {
         if(Build.VERSION.SDK_INT>=26 && !context.packageManager.canRequestPackageInstalls()) {
@@ -201,57 +220,92 @@ internal object FamilyUpdates {
 
 @Composable
 internal fun FamilyUpdatePrompt() {
-    val context=LocalContext.current
-    val scope=rememberCoroutineScope()
-    val trigger=FamilyUpdates.checkRequest
-    var available by remember {mutableStateOf<AvailableFamilyUpdate?>(null)}
-    var ready by remember {mutableStateOf<File?>(null)}
-    var downloading by remember {mutableStateOf(false)}
-    var progress by remember {mutableIntStateOf(0)}
-    var error by remember {mutableStateOf("")}
-    var showNoUpdate by remember {mutableStateOf(false)}
+    val context = LocalContext.current
+    val trigger = FamilyUpdates.checkRequest
+    var available by remember { mutableStateOf<AvailableFamilyUpdate?>(null) }
+    var ready by remember { mutableStateOf<File?>(null) }
+    var workInfo by remember { mutableStateOf<WorkInfo?>(null) }
+    var error by remember { mutableStateOf("") }
+    var showNoUpdate by remember { mutableStateOf(false) }
+
     LaunchedEffect(trigger) {
         try {
-            val candidate=FamilyUpdates.find(context)
-            available=candidate
-            if(trigger>0 && candidate==null)showNoUpdate=true
-        }catch(e:Exception) { if(trigger>0) error=e.message ?: "Update check unavailable" }
+            val candidate = FamilyUpdates.find(context)
+            available = candidate
+            ready = if (candidate != null) FamilyUpdates.verifiedReady(context, candidate) else null
+            if (trigger > 0 && candidate == null) showNoUpdate = true
+        } catch (e: Exception) {
+            if (trigger > 0) error = e.message ?: "Update check unavailable"
+        }
     }
-    if (showNoUpdate) AlertDialog(onDismissRequest={showNoUpdate=false},
-        title={Text("Family Touch is up to date")},
-        text={Text("No newer signed update is available.")},
-        confirmButton={TextButton(onClick={showNoUpdate=false}){Text("OK")}})
-    if (error.isNotEmpty()) AlertDialog(onDismissRequest={error=""},
-        title={Text("Update unavailable")},text={Text(error)},
-        confirmButton={TextButton(onClick={error=""}){Text("OK")}})
-    available?.let { update ->
-        AlertDialog(onDismissRequest={if(!downloading)available=null},
-            title={Text("New Family Touch update")},
-            text={Column(verticalArrangement=Arrangement.spacedBy(12.dp)) {
-                Text("Version " + update.name + " is available. Update now?")
-                if(downloading) {
-                    LinearProgressIndicator(progress={progress/100f},modifier=Modifier.fillMaxWidth())
-                    Text("Downloading verified APK: " + progress + "%")
-                }
-                if(ready!=null && !FamilyUpdates.canInstall(context))
-                    Text("Allow installation from Family Touch in Android settings, then tap Install.")
-                Text("Android will ask you to confirm the installation.",style=MaterialTheme.typography.bodySmall)
-            }},
-            confirmButton={TextButton(enabled=!downloading,onClick={
-                if(ready!=null) {
-                    try {FamilyUpdates.install(context,ready!!)}
-                    catch(e:Exception){error=e.message?:"Cannot open installer"}
-                }else {
-                    downloading=true
-                    scope.launch {
-                        try {
-                            ready=FamilyUpdates.download(context,update) { progress=it }
-                            FamilyUpdates.install(context,ready!!)
-                        } catch(e:Exception) { error=e.message?:"Download failed" }
-                        finally { downloading=false }
+    DisposableEffect(available?.code, context) {
+        val code = available?.code
+        if (code == null) {
+            workInfo = null
+            onDispose { }
+        } else {
+            val live = WorkManager.getInstance(context.applicationContext)
+                .getWorkInfosForUniqueWorkLiveData(FamilyUpdates.workName(code))
+            val observer = Observer<List<WorkInfo>> { infos ->
+                workInfo = infos.firstOrNull()
+            }
+            live.observeForever(observer)
+            onDispose { live.removeObserver(observer) }
+        }
+    }
+    LaunchedEffect(workInfo?.state) {
+        val candidate = available
+        if (candidate != null && workInfo?.state == WorkInfo.State.SUCCEEDED) {
+            ready = FamilyUpdates.verifiedReady(context, candidate)
+        }
+    }
+    if (showNoUpdate) AlertDialog(onDismissRequest = { showNoUpdate = false },
+        title = { Text("Family Touch is up to date") },
+        text = { Text("No newer signed update is available.") },
+        confirmButton = { TextButton(onClick = { showNoUpdate = false }) { Text("OK") } })
+    if (error.isNotBlank()) AlertDialog(onDismissRequest = { error = "" },
+        title = { Text("Update unavailable") }, text = { Text(error) },
+        confirmButton = { TextButton(onClick = { error = "" }) { Text("OK") } })
+    available?.let { candidate ->
+        val state = workInfo?.state
+        val running = state == WorkInfo.State.RUNNING ||
+            state == WorkInfo.State.ENQUEUED || state == WorkInfo.State.BLOCKED
+        val pct = workInfo?.progress?.getInt(FamilyUpdateWorker.KEY_PROGRESS, 0) ?: 0
+        AlertDialog(onDismissRequest = { available = null },
+            title = { Text(if (ready != null) "Verified update ready" else "New Family Touch update") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Version " + candidate.name)
+                    if (running) {
+                        LinearProgressIndicator(progress = { pct / 100f },
+                            modifier = Modifier.fillMaxWidth())
+                        Text("Background download: $pct%. Safe to leave or lock the app.")
+                        val warning = workInfo?.progress?.getString(FamilyUpdateWorker.KEY_ERROR)
+                        if (!warning.isNullOrBlank()) Text(warning)
+                    } else if (ready != null) {
+                        Text("Downloaded and signature-verified. Android will ask you to confirm installation.")
+                        if (!FamilyUpdates.canInstall(context))
+                            Text("Allow Family Touch to install unknown apps in Android settings, then tap Install.")
+                    } else {
+                        Text("Downloading continues outside Family Touch and while your PIN is locked. " +
+                            "If your phone restarts or the network disconnects, it resumes later.")
+                        if (candidate.mirrors.isNotEmpty()) Text("Backup source available: Google Drive.")
                     }
                 }
-            }) {Text(if(ready!=null)"Install update" else if(downloading)"Downloading…" else "Update now")}},
-            dismissButton={TextButton(enabled=!downloading,onClick={available=null}){Text("Later")}})
+            },
+            confirmButton = {
+                TextButton(enabled = !running, onClick = {
+                    if (ready != null) {
+                        try { FamilyUpdates.install(context, ready!!) }
+                        catch (e: Exception) { error = e.message ?: "Cannot open Android installer" }
+                    } else {
+                        try { FamilyUpdates.enqueue(context, candidate) }
+                        catch (e: Exception) { error = e.message ?: "Cannot schedule update" }
+                    }
+                }) { Text(if (ready != null) "Install update" else if (running) "Downloading…" else "Download in background") }
+            },
+            dismissButton = {
+                TextButton(onClick = { available = null }) { Text("Close") }
+            })
     }
 }
