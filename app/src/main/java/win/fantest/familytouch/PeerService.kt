@@ -175,8 +175,13 @@ class PeerService : Service() {
             if (session != null) {
                 val decline = callAction(NotificationIds.ACTION_DECLINE_CALL, session)
                 val answer = callAction(NotificationIds.ACTION_ANSWER_CALL, session)
-                val caller = androidx.core.app.Person.Builder().setName(text).setImportant(true).build()
-                builder.setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, decline, answer))
+                // CallStyle requires a qualifying call foreground service or full-screen intent
+                // on newer Android versions; without it NotificationManager.notify() throws,
+                // interrupting incoming signaling. Use compatible actionable call alerts.
+                builder.setOngoing(true)
+                    .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Decline", decline)
+                    .addAction(android.R.drawable.sym_action_call, "Answer", answer)
+                    .setContentText(text + " · Tap Answer or Decline")
             }
         }
         nm.notify(if (call) NotificationIds.INCOMING_CALL else NotificationIds.messageForPeer(requireNotNull(peerId)),
