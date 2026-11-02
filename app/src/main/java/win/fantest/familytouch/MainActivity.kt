@@ -60,6 +60,8 @@ import androidx.compose.material.icons.outlined.Videocam
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.EmojiEmotions
 import androidx.compose.material.icons.outlined.CameraAlt
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.AttachFile
@@ -280,7 +282,8 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
                         IconButton(onClick = { chatMenuExpanded = true }, modifier = Modifier.size(40.dp)) {
                             Icon(Icons.Outlined.MoreVert, "Conversation menu", tint = ink)
                         }
-                        DropdownMenu(expanded = chatMenuExpanded, onDismissRequest = { chatMenuExpanded = false }) {
+                        DropdownMenu(expanded = chatMenuExpanded, onDismissRequest = { chatMenuExpanded = false },
+                            shape = RoundedCornerShape(16.dp)) {
                             DropdownMenuItem(text = { Text("Search conversation") }, onClick = {
                                 chatMenuExpanded = false; chatMenuAction = "search"
                             })
@@ -336,7 +339,10 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
                         icon = {
                             if (idx == 0 && FamilyStore.unreadTotal() > 0) {
                                 BadgedBox(badge = {
-                                    Badge { Text(FamilyStore.unreadTotal().coerceAtMost(99).toString()) }
+                                    Badge(modifier = Modifier.offset(x = (-5).dp, y = 3.dp),
+                                        containerColor = Color(0xFFE85B64), contentColor = Color.White) {
+                                        Text(FamilyStore.unreadTotal().coerceAtMost(99).toString())
+                                    }
                                 }) { Icon(icon, label) }
                             } else Icon(icon, label)
                         }, label = { Text(label, fontSize = 11.sp) },
@@ -429,9 +435,9 @@ private fun ChatsPage(peers: List<Peer>, onOpen: (String) -> Unit) {
         }
     }
     if (newGroup) GroupEditor(onDismiss = { newGroup = false }, onSaved = { newGroup = false; onOpen(it.id) })
-    PullToRefreshBox(isRefreshing = refreshing, onRefresh = { refresh() }, modifier = Modifier.fillMaxSize()) {
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 8.dp)) {
-            item { TextButton(onClick = { newGroup = true }, modifier = Modifier.padding(horizontal = 12.dp)) { Text("Create group") } }
+    Box(Modifier.fillMaxSize()) {
+        PullToRefreshBox(isRefreshing = refreshing, onRefresh = { refresh() }, modifier = Modifier.fillMaxSize()) {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 86.dp, top = 8.dp)) {
             if (peers.isEmpty() && GroupStore.groups.isEmpty()) item {
                 Column(Modifier.fillMaxWidth().padding(top = 85.dp, start = 30.dp, end = 30.dp),
                     horizontalAlignment = Alignment.CenterHorizontally) {
@@ -449,6 +455,12 @@ private fun ChatsPage(peers: List<Peer>, onOpen: (String) -> Unit) {
                 PeerRow(peer, message?.text ?: "Start a conversation",
                     onClick = { onOpen(peer.id) }, unread = FamilyStore.unreadFor(peer.id))
             }
+        }
+        }
+        FloatingActionButton(onClick = { newGroup = true },
+            modifier = Modifier.align(Alignment.BottomEnd).padding(18.dp),
+            containerColor = accent, contentColor = bg, shape = CircleShape) {
+            Icon(Icons.Outlined.Add, "Create group")
         }
     }
 }
@@ -489,7 +501,7 @@ private fun CallsPage(peers: List<Peer>, onCall: (Peer, Boolean) -> Unit) {
         }
         items(log, key = { "call-" + it.id }) { entry ->
             val peer = FamilyStore.find(entry.peerId)
-            Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp),
+            Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 17.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 Icon(if (entry.isVideo) Icons.Outlined.Videocam else Icons.Outlined.Call,
                     null, tint = if (entry.outcome == "missed") Color(0xFFFF9090) else accent)
@@ -548,8 +560,23 @@ private fun ContactsPage(peers: List<Peer>, onOpen: (String) -> Unit, onConnecti
             verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Registered family devices", fontWeight = FontWeight.Bold)
-                Text(if (connected) FamilyStore.directoryStatus else
-                    "Private network disconnected - connect before discovery", color = muted, fontSize = 12.sp)
+                val statusText = if (connected) FamilyStore.directoryStatus else
+                    "Private network disconnected - connect before discovery"
+                val warning = statusText.contains("unavailable", true) ||
+                    statusText.contains("retrying", true) ||
+                    statusText.contains("disconnected", true) ||
+                    statusText.contains("blocked", true)
+                Row(Modifier.padding(top = 5.dp)
+                    .background(if (warning) Color(0xFF4E3D23) else Color(0xFF183B31),
+                        RoundedCornerShape(8.dp)).padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    if (warning) {
+                        Icon(Icons.Outlined.WarningAmber, null, Modifier.size(15.dp), tint = Color(0xFFFFD68B))
+                        Spacer(Modifier.width(5.dp))
+                    }
+                    Text(statusText, color = if (warning) Color(0xFFFFD68B) else Color(0xFFB1E2CF),
+                        fontSize = 11.sp, maxLines = 3)
+                }
             }
             Spacer(Modifier.width(8.dp))
             OutlinedButton(onClick = { doRefresh() }, enabled = !refreshing) {
@@ -642,6 +669,7 @@ private fun EmptyState(title: String, subtitle: String) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> Unit) {
     val group = GroupStore.find(peer.id)
@@ -661,21 +689,31 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
         if (menuAction != null) onMenuHandled()
     }
     if (gallery) MediaGallery(peer.id) { gallery = false }
-    actionMessage?.let { item -> AlertDialog(onDismissRequest = { actionMessage = null }, title = { Text("Message") },
-        text = { Column {
-            Text((AttachmentTransport.parse(item.text)?.name ?: item.text).take(180), maxLines = 3)
-            TextButton(onClick = { replyTo = item; actionMessage = null }) { Text("Reply") }
-            Row(Modifier.horizontalScroll(rememberScrollState())) {
-                ReactionPolicy.choices.forEach { emoji -> TextButton(onClick = {
-                    try { MessageReactions.react(item, emoji); actionMessage = null }
-                    catch (_: Exception) { FamilyStore.lastError = "Reaction queue is full; try again after reconnecting" }
-                }) { Text(emoji) } }
+    actionMessage?.let { item ->
+        ModalBottomSheet(onDismissRequest = { actionMessage = null },
+            containerColor = surface,
+            shape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp)) {
+            Column(Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, bottom = 23.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Text((AttachmentTransport.parse(item.text)?.name ?: item.text).take(130),
+                    maxLines = 2, overflow = TextOverflow.Ellipsis, color = ink, fontSize = 14.sp)
+                Row(Modifier.fillMaxWidth().background(Color(0xFF2A3942), RoundedCornerShape(30.dp)),
+                    horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+                    ReactionPolicy.choices.forEach { emoji ->
+                        Box(Modifier.size(45.dp).clickable {
+                            try { MessageReactions.react(item, emoji); actionMessage = null }
+                            catch (_: Exception) { FamilyStore.lastError = "Reaction unavailable. Retry after reconnecting" }
+                        }, contentAlignment = Alignment.Center) { Text(emoji, fontSize = 23.sp) }
+                    }
+                }
+                TextButton(onClick = { replyTo = item; actionMessage = null }) { Text("Reply", color = accent) }
+                TextButton(onClick = {
+                    try { MessageReactions.react(item, ""); actionMessage = null }
+                    catch (_: Exception) { FamilyStore.lastError = "Reaction unavailable. Retry after reconnecting" }
+                }) { Text("Remove my reaction", color = muted) }
             }
-            TextButton(onClick = {
-                try { MessageReactions.react(item, ""); actionMessage = null }
-                catch (_: Exception) { FamilyStore.lastError = "Reaction queue is full; try again after reconnecting" }
-            }) { Text("Remove my reaction") }
-        } }, confirmButton = { TextButton(onClick = { actionMessage = null }) { Text("Close") } }) }
+        }
+    }
     val context = LocalContext.current
     var locationPreview by remember { mutableStateOf<String?>(null) }
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -889,24 +927,32 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
                                     senderName = if (msg.outgoing) FamilyStore.nickname else peer.name,
                                     senderPhoto = if (msg.outgoing) FamilyStore.profilePhoto else FamilyStore.peerPhotos[peer.id])
                             } else {
-                                Text((if (attachment.mime.startsWith("image/")) "Photo" else "Video") +
-                                    " · " + attachment.name, color = textColor, maxLines = 2)
+                                if (attachment.mime.startsWith("image/")) {
+                                    ChatImageThumbnail(attachment, modifier = Modifier.clickable {
+                                        viewedMedia = attachment
+                                    })
+                                } else {
+                                    Box(Modifier.size(width = 210.dp, height = 110.dp)
+                                        .background(Color(0xFF2A3942), RoundedCornerShape(8.dp))
+                                        .clickable { viewedMedia = attachment },
+                                        contentAlignment = Alignment.Center) {
+                                        Icon(Icons.Outlined.Videocam, "Play video", tint = accent)
+                                    }
+                                }
+                                Text(attachment.name, color = textColor, fontSize = 12.sp, maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis)
                                 Text(((attachment.size + 1023) / 1024).toString() + " KB",
-                                    fontSize = 11.sp, color = secondaryColor)
-                                Text("Tap to view", color = actionColor,
-                                    modifier = Modifier.clickable { viewedMedia = attachment })
+                                    color = muted, fontSize = 10.sp)
                             }
                         } else if (msg.text.startsWith("Location: https://www.google.com/maps?q=")) {
-                            Text("Shared location", color = textColor)
-                            Text("Open in Maps", color = actionColor,
-                                modifier = Modifier.clickable {
-                                    try {
-                                        context.startActivity(Intent(Intent.ACTION_VIEW,
-                                            Uri.parse(msg.text.removePrefix("Location: "))))
-                                    } catch (_: Exception) {
-                                        FamilyStore.lastError = "No maps app or browser available"
-                                    }
-                                })
+                            ChatLocationPreview(msg.text.removePrefix("Location: ")) {
+                                try {
+                                    context.startActivity(Intent(Intent.ACTION_VIEW,
+                                        Uri.parse(msg.text.removePrefix("Location: "))))
+                                } catch (_: Exception) {
+                                    FamilyStore.lastError = "No maps app or browser available"
+                                }
+                            }
                         } else Text(if (quoted != null) msg.text.substringAfter("\n\n") else msg.text,
                             color = textColor, fontSize = 15.sp, lineHeight = 20.sp)
                         val reactions = MessageReactions.summary(msg.id)
@@ -929,8 +975,16 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
         replyTo?.let { item -> Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp)
             .background(surface, RoundedCornerShape(9.dp)).padding(horizontal = 9.dp),
             verticalAlignment = Alignment.CenterVertically) {
-            Text("Replying to: " + (AttachmentTransport.parse(item.text)?.name ?: item.text).take(140), Modifier.weight(1f), maxLines = 2)
-            TextButton(onClick = { replyTo = null }) { Text("Cancel") }
+            val quotedAttachment = AttachmentTransport.parse(item.text)
+            if (quotedAttachment?.mime?.startsWith("image/") == true) {
+                ChatImageThumbnail(quotedAttachment, 42.dp, Modifier.padding(end = 8.dp))
+            }
+            Column(Modifier.weight(1f)) {
+                Text("Reply", color = Color(0xFFCEB1F3), fontSize = 12.sp)
+                Text((quotedAttachment?.name ?: item.text).take(140), maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, color = ink, fontSize = 12.sp)
+            }
+            TextButton(onClick = { replyTo = null }) { Text("✕", color = muted) }
         } }
         Row(Modifier.fillMaxWidth().background(bg).padding(horizontal = 6.dp, vertical = 6.dp),
             verticalAlignment = Alignment.Bottom) {
@@ -1050,7 +1104,8 @@ private fun SettingsPage(networkStatus: VpnConnectionStatus, onRecordings: () ->
         VpnSettings()
         FamilyPinSettings()
         OutlinedButton(onClick = onRecordings) { Text("Local call recordings") }
-        OutlinedButton(onClick = { FamilyUpdates.checkNow() }) { Text("Check for updates") }
+        Button(onClick = { FamilyUpdates.checkNow() }, colors = ButtonDefaults.buttonColors(
+            containerColor = accent, contentColor = bg)) { Text("Check for updates") }
         HorizontalDivider(color = Color(0xFF24415C))
         Text("Family devices appear automatically after connecting. Messages stay on your devices.", color = muted, fontSize = 13.sp)
     }

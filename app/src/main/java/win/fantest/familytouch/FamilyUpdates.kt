@@ -16,6 +16,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -94,43 +95,92 @@ internal object FamilyUpdates {
             throw IOException("Update signature does not match installed Family Touch")
         return fingerprints(newSigners).first()
     }
+    /** SHA-256 bound resumable APK transfer. Uses small HTTP Range requests, retries
+     * transient connection resets, and preserves an incomplete download across app restarts.
+     * Neither the advertised checksum nor the APK signer can be bypassed.
+     */
     suspend fun download(context: Context, update: AvailableFamilyUpdate,
                          progress: (Int) -> Unit): File = withContext(Dispatchers.IO) {
-        val folder=File(context.cacheDir,"updates").also{it.mkdirs()}
-        val file=File(folder,"family-touch-update.apk")
-        val part=File(folder,"family-touch-update.partial")
-        if(part.exists())part.delete()
-        val digest=MessageDigest.getInstance("SHA-256")
-        var received=0L
-        try {
-            http.newCall(Request.Builder().url(update.url).build()).execute().use { response ->
-                if (!response.isSuccessful) throw IOException("Download error HTTP " + response.code)
-                val source=response.body?.byteStream() ?: throw IOException("No APK data")
-                source.use { stream ->
-                    part.outputStream().use { out ->
-                        val buffer=ByteArray(65536)
-                        while (true) {
-                            val n=stream.read(buffer)
-                            if(n<0)break
-                            received+=n
-                            if(received>update.bytes)throw IOException("Unexpected APK length")
-                            out.write(buffer,0,n)
-                            digest.update(buffer,0,n)
-                            progress((received*100/update.bytes).toInt().coerceIn(0,100))
-                        }
-                    }
+        val folder = File(context.cacheDir, "updates").also { it.mkdirs() }
+        val file = File(folder, "family-touch-update.apk")
+        val part = File(folder, "family-touch-" + update.code + "-" +
+            update.checksum.take(12) + ".partial")
+        if (part.exists() && part.length() > update.bytes) part.delete()
+        val digest = MessageDigest.getInstance("SHA-256")
+        val buffer = ByteArray(65536)
+        var received = 0L
+        if (part.exists()) {
+            part.inputStream().buffered().use { input ->
+                while (true) {
+                    val n = input.read(buffer)
+                    if (n < 0) break
+                    digest.update(buffer, 0, n)
+                    received += n
                 }
             }
-            val hash=digest.digest().joinToString(""){"%02x".format(it.toInt() and 255)}
-            if(received!=update.bytes || hash!=update.checksum)throw IOException("APK checksum mismatch")
-            if(file.exists())file.delete()
-            if(!part.renameTo(file))throw IOException("Cannot store update")
-            signerDigest(context,file)
-            val info=context.packageManager.getPackageArchiveInfo(file.path,0)
-                ?:throw IOException("APK package invalid")
-            if(info.longVersionCode != update.code)throw IOException("APK version mismatch")
+            progress((received * 100 / update.bytes).toInt().coerceIn(0, 100))
+        }
+        var failuresWithoutCompletedChunk = 0
+        while (received < update.bytes) {
+            val startOffset = received
+            val endOffset = minOf(update.bytes - 1, received + 2_097_152L - 1)
+            try {
+                val request = Request.Builder().url(update.url)
+                    .header("Range", "bytes=" + startOffset + "-" + endOffset)
+                    .header("Cache-Control", "no-cache").build()
+                http.newCall(request).execute().use { response ->
+                    if (response.code != 206) throw IOException(
+                        "Update server requires partial downloads (HTTP " + response.code + ")")
+                    val expected = "bytes " + startOffset + "-" + endOffset + "/" + update.bytes
+                    if (response.header("Content-Range")?.trim() != expected)
+                        throw IOException("Update server returned an invalid byte range")
+                    val source = response.body?.byteStream() ?: throw IOException("No APK data")
+                    source.use { input ->
+                        java.io.FileOutputStream(part, true).buffered().use { output ->
+                            while (received <= endOffset) {
+                                val limit = minOf(buffer.size.toLong(), endOffset - received + 1).toInt()
+                                val n = input.read(buffer, 0, limit)
+                                if (n < 0) break
+                                output.write(buffer, 0, n)
+                                digest.update(buffer, 0, n)
+                                received += n
+                                progress((received * 100 / update.bytes).toInt().coerceIn(0, 100))
+                            }
+                        }
+                    }
+                    if (received != endOffset + 1) throw IOException(
+                        "Incomplete update chunk at byte " + received)
+                }
+                failuresWithoutCompletedChunk = 0
+            } catch (e: IOException) {
+                failuresWithoutCompletedChunk++
+                if (failuresWithoutCompletedChunk >= 8) {
+                    throw IOException(
+                        "Connection interrupted; tap Update now again to resume from " +
+                            (received * 100 / update.bytes) + "%. " + (e.message ?: ""), e)
+                }
+                delay(500L * failuresWithoutCompletedChunk)
+            }
+        }
+        val calculated = digest.digest().joinToString("") {
+            "%02x".format(it.toInt() and 255)
+        }
+        if (calculated != update.checksum || received != update.bytes) {
+            part.delete()
+            throw IOException("APK checksum mismatch; discarded incomplete update")
+        }
+        if (file.exists() && !file.delete()) throw IOException("Cannot replace old update cache")
+        if (!part.renameTo(file)) throw IOException("Cannot store verified APK")
+        try {
+            signerDigest(context, file)
+            val info = context.packageManager.getPackageArchiveInfo(file.path, 0)
+                ?: throw IOException("APK package invalid")
+            if (info.longVersionCode != update.code) throw IOException("APK version mismatch")
             file
-        }catch(e:Exception){part.delete();file.delete();throw e}
+        } catch (e: Exception) {
+            file.delete()
+            throw e
+        }
     }
     fun install(context:Context,file:File) {
         if(Build.VERSION.SDK_INT>=26 && !context.packageManager.canRequestPackageInstalls()) {

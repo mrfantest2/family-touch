@@ -52,7 +52,8 @@ internal fun ChatMediaViewer(info: AttachmentTransport.Info, onDismiss: () -> Un
         Column(Modifier.fillMaxSize().background(Color(0xFF071424)).statusBarsPadding().navigationBarsPadding()) {
             Row(Modifier.fillMaxWidth().padding(8.dp)) {
                 TextButton(onClick = onDismiss) { Text("Back") }
-                Text(info.name, Modifier.weight(1f).padding(12.dp), maxLines = 2)
+                Text(info.name, Modifier.weight(1f).padding(12.dp), maxLines = 1,
+                    softWrap = false, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 TextButton(onClick = { runCatching { if (onShare != null) onShare() else AttachmentTransport.share(context, info) }
                     .onFailure { error = "No compatible sharing app" } }) { Text("Share") }
             }
