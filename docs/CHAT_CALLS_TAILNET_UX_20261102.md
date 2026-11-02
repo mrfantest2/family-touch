@@ -10,10 +10,11 @@ Base: Family Touch v0.3.8 feature branch commit 83dada9. Changes made in a separ
 - Microphone/camera permission grant now resumes the pending call action.
 - Direct WebRTC calling waits for local SDP set success before sending offers/answers, rejects foreign-session answer/ICE and bounds early ICE candidate buffers. Direct ICE still needs tailnet reachability.
 - Built-in Tailscale VPN now offers tailnet routes to other Android applications instead of restricting traffic to Family Touch's UID. Tailnet ACLs, VPN consent and single-active-Android-VPN constraints remain enforced.
+- When a separate Tailscale VPN already owns the Android VPN interface, Family Touch reuses that connected 100.x private address for messaging and calls without replacing the VPN owner. A user-initiated switch to the embedded VPN remains available.
 
 ## Open acceptance gates
 - OP7 + S25 genuine message popup/sound/keyboard/audio-note, call ring/answer/hangup, two-way microphone/earpiece/speaker, video rendering and ICE across networks.
-- OP7 was found using the separate Tailscale VPN, S25 the Brave VPN. Do not silently replace either active VPN.
+- Current network audit: OP7 is connected with Family Touch embedded VPN (100.93.5.100) and S25 with separate Tailscale VPN (100.99.16.99); two-way ICMP succeeds. Older S25 Family Touch v0.3.8 cannot reuse that external VPN and needs an in-place update to validate receive/call handling. Do not silently replace S25 VPN.
 - Do not declare call fix complete until audio/video two-device evidence is captured.
 - Keep embedded app data and installed Admin untouched. Do not overwrite production update feed before acceptance.
 
