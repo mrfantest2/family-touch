@@ -47,6 +47,22 @@ internal data class AvailableFamilyUpdate(
 )
 
 /** Self-update checks are HTTPS only. Installer signatures must match the installed app. */
+/** The update feed can be older than this APK. Reporting both versions is essential. */
+internal data class FamilyUpdateCheck(
+    val publishedCode: Long,
+    val publishedName: String,
+    val update: AvailableFamilyUpdate?
+)
+
+internal object FamilyVersionLabels {
+    fun format(name: String, code: Long): String = "v${name.substringBefore('-')} (build $code)"
+    fun status(installedCode: Long, publishedCode: Long): String = when {
+        publishedCode > installedCode -> "A newer signed update is available."
+        publishedCode == installedCode -> "Your version matches the latest published release."
+        else -> "Your installed version is newer than the published update feed."
+    }
+}
+
 internal object FamilyUpdates {
     var checkRequest by mutableIntStateOf(0)
         private set
@@ -150,12 +166,14 @@ internal object FamilyUpdates {
                 }
             }
     }
-    suspend fun find(context: Context): AvailableFamilyUpdate? = withContext(Dispatchers.IO) {
+    suspend fun check(context: Context): FamilyUpdateCheck = withContext(Dispatchers.IO) {
         val metadata = String(safeResponse("$HOST/manifests/" + context.packageName + ".json", 4096))
         val j = JSONObject(metadata)
         if (j.getString("packageName") != context.packageName) throw IOException("Package mismatch")
         val code = j.getLong("versionCode")
-        if (code <= BuildConfig.VERSION_CODE.toLong()) return@withContext null
+        val publishedName = j.optString("versionName", "Unknown version")
+        if (code <= BuildConfig.VERSION_CODE.toLong())
+            return@withContext FamilyUpdateCheck(code, publishedName, null)
         val url = j.getString("apkUrl")
         if (!url.startsWith("$HOST/apks/") || !isAllowedDownloadUrl(url))
             throw IOException("Untrusted APK URL")
@@ -173,7 +191,8 @@ internal object FamilyUpdates {
                 }
             }
         }
-        AvailableFamilyUpdate(code, j.optString("versionName", "Latest version"), bytes, hash, url, mirrors)
+        FamilyUpdateCheck(code, publishedName,
+            AvailableFamilyUpdate(code, publishedName, bytes, hash, url, mirrors))
     }
     internal fun verifyPackageAndSigner(context: Context, file: File, version: Long) {
         signerDigest(context, file)
@@ -227,10 +246,19 @@ internal fun FamilyUpdatePrompt() {
     var workInfo by remember { mutableStateOf<WorkInfo?>(null) }
     var error by remember { mutableStateOf("") }
     var showNoUpdate by remember { mutableStateOf(false) }
+    var published by remember { mutableStateOf<FamilyUpdateCheck?>(null) }
+    val installed = FamilyVersionLabels.format(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE.toLong())
 
     LaunchedEffect(trigger) {
+        if (trigger > 0) {
+            showNoUpdate = false
+            error = ""
+            published = null
+        }
         try {
-            val candidate = FamilyUpdates.find(context)
+            val check = FamilyUpdates.check(context)
+            val candidate = check.update
+            published = check
             available = candidate
             ready = if (candidate != null) FamilyUpdates.verifiedReady(context, candidate) else null
             if (trigger > 0 && candidate == null) showNoUpdate = true
@@ -260,11 +288,26 @@ internal fun FamilyUpdatePrompt() {
         }
     }
     if (showNoUpdate) AlertDialog(onDismissRequest = { showNoUpdate = false },
-        title = { Text("Family Touch is up to date") },
-        text = { Text("No newer signed update is available.") },
+        title = { Text("Family Touch update status") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Installed version: $installed")
+                published?.let { current ->
+                    Text("Published release: " +
+                        FamilyVersionLabels.format(current.publishedName, current.publishedCode))
+                    Text(FamilyVersionLabels.status(BuildConfig.VERSION_CODE.toLong(), current.publishedCode))
+                }
+            }
+        },
         confirmButton = { TextButton(onClick = { showNoUpdate = false }) { Text("OK") } })
     if (error.isNotBlank()) AlertDialog(onDismissRequest = { error = "" },
-        title = { Text("Update unavailable") }, text = { Text(error) },
+        title = { Text("Update check unavailable") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Installed version: $installed")
+                Text("Unable to check the published release: $error")
+            }
+        },
         confirmButton = { TextButton(onClick = { error = "" }) { Text("OK") } })
     available?.let { candidate ->
         val state = workInfo?.state
@@ -275,7 +318,9 @@ internal fun FamilyUpdatePrompt() {
             title = { Text(if (ready != null) "Verified update ready" else "New Family Touch update") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Version " + candidate.name)
+                    Text("Installed version: $installed")
+                    Text("Available update: " +
+                        FamilyVersionLabels.format(candidate.name, candidate.code))
                     if (running) {
                         LinearProgressIndicator(progress = { pct / 100f },
                             modifier = Modifier.fillMaxWidth())
