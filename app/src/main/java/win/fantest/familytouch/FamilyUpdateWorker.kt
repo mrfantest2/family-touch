@@ -179,7 +179,16 @@ internal class FamilyUpdateWorker(
                 part.delete()
                 return@withContext Result.failure(workDataOf(KEY_ERROR to "APK checksum mismatch"))
             }
-            FamilyUpdates.verifyPackageAndSigner(applicationContext, part, version)
+            try {
+                FamilyUpdates.verifyPackageAndSigner(applicationContext, part, version)
+            } catch (_: Exception) {
+                // A complete APK with the wrong signer, package or version is not
+                // a transient network failure. Never retry or offer it to Android.
+                part.delete()
+                return@withContext Result.failure(
+                    workDataOf(KEY_ERROR to "Downloaded APK rejected: signature, package or version mismatch")
+                )
+            }
             if (finished.exists() && !finished.delete()) {
                 return@withContext Result.retry()
             }
