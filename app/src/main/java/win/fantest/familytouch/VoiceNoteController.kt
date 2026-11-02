@@ -27,7 +27,9 @@ internal object VoiceNotePolicy {
 
 internal class VoiceNoteController(private val context: Context) {
     var recording by mutableStateOf(false); private set
+    var paused by mutableStateOf(false); private set
     var durationMs by mutableLongStateOf(0L); private set
+    private var accumulatedMs = 0L
     var file by mutableStateOf<File?>(null); private set
     private var recorder: MediaRecorder? = null
     private var started = 0L
@@ -52,13 +54,31 @@ internal class VoiceNoteController(private val context: Context) {
                 if (what == MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED) stop()
             }
             media.prepare(); media.start()
-            started = SystemClock.elapsedRealtime(); durationMs = 0; recording = true
+            accumulatedMs = 0L
+            started = SystemClock.elapsedRealtime()
+            durationMs = 0L; paused = false; recording = true
         } catch (e: Exception) { cancel(); throw e }
     }
-    fun tick() { if (recording) durationMs = (SystemClock.elapsedRealtime() - started).coerceAtMost(VoiceNotePolicy.MAX_DURATION_MS) }
+    fun tick() {
+        if (recording && !paused) durationMs = (accumulatedMs +
+            SystemClock.elapsedRealtime() - started).coerceAtMost(VoiceNotePolicy.MAX_DURATION_MS)
+    }
+    fun pause() {
+        if (!recording || paused) return
+        tick()
+        recorder?.pause()
+        accumulatedMs = durationMs
+        paused = true
+    }
+    fun resume() {
+        if (!recording || !paused) return
+        recorder?.resume()
+        started = SystemClock.elapsedRealtime()
+        paused = false
+    }
     fun stop() {
         if (!recording) return
-        tick(); recording = false
+        tick(); recording = false; paused = false
         try { recorder?.stop() } catch (_: RuntimeException) { file?.delete(); file = null }
         finally { recorder?.release(); recorder = null }
     }
@@ -70,7 +90,8 @@ internal class VoiceNoteController(private val context: Context) {
     }
     fun cancel() {
         if (recording) runCatching { recorder?.stop() }
-        recording = false; recorder?.release(); recorder = null
+        recording = false; paused = false; accumulatedMs = 0L
+        recorder?.release(); recorder = null
         file?.delete(); file = null; durationMs = 0
     }
 }

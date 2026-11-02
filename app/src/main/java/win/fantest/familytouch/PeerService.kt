@@ -166,15 +166,22 @@ class PeerService : Service() {
     }
 
     private fun showNotification(title: String, text: String, call: Boolean = false, peerId: String? = null) {
-        if (!call && FamilyStore.appVisible && FamilyStore.selectedPeer == peerId) return
+        // A locked chat must still alert even if it is the selected conversation.
+        val isLockedConversation = !call && peerId != null &&
+            runCatching { ChatSecurity.enabled(this, peerId) }.getOrDefault(true)
+        if (!call && FamilyStore.appVisible && FamilyStore.selectedPeer == peerId &&
+            !isLockedConversation) return
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         val c = if (call) callChannel else messageChannel
+        // Hide message text in notifications when this conversation has its own PIN.
         val builder = NotificationCompat.Builder(this, c).setSmallIcon(R.drawable.ic_family_touch)
-            .setContentTitle(title).setContentText(text)
+            .setContentTitle(if (isLockedConversation) "Locked conversation" else title)
+            .setContentText(if (isLockedConversation) "New private family message" else text)
             .setContentIntent(openApp(peerId)).setAutoCancel(!call)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(if (call) NotificationCompat.CATEGORY_CALL else NotificationCompat.CATEGORY_MESSAGE)
-            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setVisibility(if (isLockedConversation) NotificationCompat.VISIBILITY_SECRET
+                else NotificationCompat.VISIBILITY_PRIVATE)
         if (call) {
             val session = FamilyStore.incomingCall?.sessionId ?: GroupCallController.incoming?.sessionId
             if (session != null) {

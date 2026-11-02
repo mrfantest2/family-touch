@@ -31,6 +31,8 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.ui.input.pointer.pointerInput
@@ -216,6 +218,7 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
     var chatMenuExpanded by remember { mutableStateOf(false) }
     var chatMenuAction by remember { mutableStateOf<String?>(null) }
     var showContactDetails by remember { mutableStateOf(false) }
+    var showChatSecurityConfig by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var networkStatus by remember { mutableStateOf(EmbeddedTailnet.status) }
@@ -302,8 +305,8 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
                             DropdownMenuItem(text = { Text("Shared media") }, onClick = {
                                 chatMenuExpanded = false; chatMenuAction = "media"
                             })
-                            DropdownMenuItem(text = { Text("Chat security") }, onClick = {
-                                chatMenuExpanded = false; FamilyStore.selectedPeer = null; tab = 3
+                            DropdownMenuItem(text = { Text("Lock this conversation") }, onClick = {
+                                chatMenuExpanded = false; showChatSecurityConfig = true
                             })
                         }
                     }
@@ -327,8 +330,10 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
         } else if (active != null) {
             CallPage(active, onHangup = { CallController.hangup() })
         } else if (selectedPeer != null && tab == 0) {
-            Conversation(peer = selectedPeer, menuAction = chatMenuAction,
-                onMenuHandled = { chatMenuAction = null })
+            ChatSecurityGate(selectedPeer.id) {
+                Conversation(peer = selectedPeer, menuAction = chatMenuAction,
+                    onMenuHandled = { chatMenuAction = null })
+            }
         } else {
             Box(Modifier.weight(1f)) {
                 when (tab) {
@@ -367,6 +372,8 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
         }
     }
 
+    if (showChatSecurityConfig && selectedPeer != null)
+        ChatSecuritySettingsDialog(selectedPeer.id) { showChatSecurityConfig = false }
     if (showContactDetails && selectedPeer != null) AlertDialog(
         onDismissRequest = { showContactDetails = false },
         title = { Text("Contact profile") },
@@ -568,6 +575,58 @@ private fun ContactsPage(peers: List<Peer>, onOpen: (String) -> Unit, onConnecti
     val scope = rememberCoroutineScope()
     val connected = EmbeddedTailnet.status.connected
     var refreshing by remember { mutableStateOf(false) }
+    var quickPeer by remember { mutableStateOf<Peer?>(null) }
+    var confirmHelp by remember { mutableStateOf<Peer?>(null) }
+    var pingResult by remember { mutableStateOf("") }
+    quickPeer?.let { selected ->
+        ModalBottomSheet(onDismissRequest = { quickPeer = null },
+            containerColor = surface) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Text(selected.name, style = MaterialTheme.typography.titleMedium)
+                TextButton(onClick = { quickPeer = null; onOpen(selected.id) }) {
+                    Text("Open conversation")
+                }
+                TextButton(onClick = {
+                    quickPeer = null
+                    pingResult = "Checking " + selected.name + "…"
+                    scope.launch {
+                        try {
+                            val reply = Tailnet.send(selected, "presence")
+                            pingResult = selected.name + " is " +
+                                reply.optString("status", "reachable")
+                        } catch (_: Exception) { pingResult = selected.name + " is unreachable" }
+                    }
+                }) { Text("Ping this family device") }
+                TextButton(onClick = { quickPeer = null; confirmHelp = selected }) {
+                    Text("SOS — ask for help")
+                }
+                TextButton(onClick = {
+                    quickPeer = null
+                    try {
+                        PeerOutbox.queue(selected, "Could you help me with Family Touch or KDE Connect? Please contact me so I can approve a support session.")
+                        pingResult = "Technical support request queued for " + selected.name
+                    } catch (e: Exception) { pingResult = e.message ?: "Unable to request help" }
+                }) { Text("Request technical support") }
+                Text("Remote commands require the device owner's explicit approval. No unattended access.",
+                    fontSize = 12.sp, color = muted)
+                Spacer(Modifier.height(12.dp))
+            }
+        }
+    }
+    confirmHelp?.let { chosen ->
+        AlertDialog(onDismissRequest = { confirmHelp = null },
+            title = { Text("Ask " + chosen.name + " for help?") },
+            text = { Text("Send an SOS chat message to your paired family member. This does not call emergency services.") },
+            confirmButton = { Button(onClick = {
+                try {
+                    PeerOutbox.queue(chosen, "SOS: I need help. Please contact me as soon as you can.")
+                    pingResult = "SOS message queued for " + chosen.name
+                } catch (e: Exception) { pingResult = e.message ?: "SOS request failed" }
+                confirmHelp = null
+            }) { Text("Send SOS") } },
+            dismissButton = { TextButton(onClick = { confirmHelp = null }) { Text("Cancel") } })
+    }
     fun doRefresh() {
         if (refreshing) return
         if (!connected) {
@@ -615,6 +674,8 @@ private fun ContactsPage(peers: List<Peer>, onOpen: (String) -> Unit, onConnecti
                 Text(if (refreshing) "Refreshing…" else if (connected) "Refresh" else "Connect")
             }
         }
+        if (pingResult.isNotBlank()) Text(pingResult, color = accent, fontSize = 12.sp,
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 4.dp))
         PullToRefreshBox(
             isRefreshing = refreshing,
             onRefresh = { doRefresh() },
@@ -633,16 +694,20 @@ private fun ContactsPage(peers: List<Peer>, onOpen: (String) -> Unit, onConnecti
                     }
                 }
                 items(peers, key = { it.id }) { peer ->
-                    PeerRow(peer, peer.ip, onClick = { onOpen(peer.id) })
+                    PeerRow(peer, peer.ip, onClick = { onOpen(peer.id) },
+                        onLongPress = { quickPeer = peer })
                 }
             }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun PeerRow(peer: Peer, subtitle: String, onClick: () -> Unit, unread: Int = 0) {
-    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 19.dp, vertical = 15.dp),
+private fun PeerRow(peer: Peer, subtitle: String, onClick: () -> Unit, unread: Int = 0,
+                    onLongPress: (() -> Unit)? = null) {
+    Row(Modifier.fillMaxWidth().combinedClickable(onClick = onClick,
+        onLongClick = { onLongPress?.invoke() }).padding(horizontal = 19.dp, vertical = 15.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Avatar(peer.name, FamilyStore.peerPhotos[peer.id]); Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
@@ -833,16 +898,18 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
     val voicePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         if (it) voiceNote = true else FamilyStore.lastError = "Microphone permission was declined"
     }
-    if (voiceNote) VoiceNoteDialog(onDismiss = { voiceNote = false }, onSend = { uri, done ->
+    val sendVoiceNote: (Uri, (Boolean) -> Unit) -> Unit = { uri, done ->
         scope.launch {
             try {
                 if (group != null) GroupStore.sendMedia(group, listOf(uri))
                 else AttachmentTransport.send(context, peer, listOf(uri)) { FamilyStore.addChat(it) }
                 done(true)
+            } catch (e: Exception) {
+                done(false)
+                FamilyStore.lastError = "Voice message failed: " + (e.message ?: "Retry")
             }
-            catch (_: Exception) { done(false); FamilyStore.lastError = "Voice note transfer failed; please try again" }
         }
-    })
+    }
     DisposableEffect(peer.id) { onDispose { locationJob?.cancel() } }
     val selectMedia = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -1130,7 +1197,9 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
             }
             TextButton(onClick = { replyTo = null }) { Text("✕", color = muted) }
         } }
-        Row(Modifier.fillMaxWidth().background(bg).padding(horizontal = 6.dp, vertical = 6.dp),
+        if (voiceNote) {
+            InlineVoiceComposer(onDismiss = { voiceNote = false }, onSend = sendVoiceNote)
+        } else Row(Modifier.fillMaxWidth().background(bg).padding(horizontal = 6.dp, vertical = 6.dp),
             verticalAlignment = Alignment.Bottom) {
             Row(Modifier.weight(1f).background(Color(0xFF2A3942), RoundedCornerShape(27.dp))
                 .heightIn(min = 50.dp), verticalAlignment = Alignment.CenterVertically) {
