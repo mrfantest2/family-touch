@@ -32,3 +32,13 @@ Source audit: draft PR #14, branch `feature/family-touch-map-live-location-20261
 - New chat-preview fix is source-only and must not be represented as installed build 42 on either phone. A separately validated signed candidate and in-place upgrade are required for device visual acceptance.
 
 No production merge, app reinstall, permission grant, call, message send, or location transmission was performed during this checkpoint.
+## Directory bootstrap failure investigation and source fix
+
+- OP7 Contacts reported Family directory unavailable, retrying automatically. Android logcat reported `FamilyEnrollment: Failed at request: SocketException` (safe class-only log, no credentials).
+- MASTER-PC Family Touch broker was running on its expected local listening port; `family-api.fantest.win` was reachable. A deliberately empty unsigned POST to `/api/v1/sync` returned HTTP 400 from both MASTER-PC and OP7, confirming public DNS/TLS/route and server response without using real credentials.
+- Android's active VPN interface on OP7 belonged to standalone Tailscale, rather than Family Touch's older embedded node. The current embedded app may reuse an active external tailnet when its own VPN service is inactive.
+- Source previously bound **every** public directory HTTPS request to `selectedPhysicalNetwork`, even in that external-VPN fallback state. This is a plausible source of the OP7 socket failure; a device-level resolution has **not** been verified.
+- `FamilyDirectory.kt` now routes HTTPS via `URL.openConnection()` when the embedded VPN service is inactive, and continues using `Network.openConnection()` on the physical underlay while the embedded service is active or stopping. Standard TLS hostname/certificate verification remains intact.
+- Added pure `DirectoryBootstrapRoute.kt` plus three tests covering external fallback, active embedded service, and stopping embedded service.
+- Combined fresh `:app:testEmbeddedUnitTest :app:lintEmbedded --offline` run PASS: **70 tests across 25 suites, 0 failures, 0 skipped; lint BUILD SUCCESSFUL**.
+- No signed APK was built or deployed from this remote session because the release-signing environment variables were unavailable. Existing device installations and stored identities remain untouched; do not claim the directory bug is fixed on Redmi or OP7 until a correctly signed APK has been deployed in place and the API sync verified on both devices.
