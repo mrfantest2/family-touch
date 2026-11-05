@@ -491,7 +491,7 @@ private fun ChatsPage(peers: List<Peer>, onOpen: (String) -> Unit) {
             }
             items(peers, key = { it.id }) { peer ->
                 val message = FamilyStore.messages.lastOrNull { it.peerId == peer.id }
-                PeerRow(peer, message?.text ?: "Start a conversation",
+                PeerRow(peer, message?.text?.let { ChatPreviewFormatter.forContact(it) } ?: "Start a conversation",
                     onClick = { onOpen(peer.id) }, unread = FamilyStore.unreadFor(peer.id))
             }
         }
