@@ -42,3 +42,23 @@ No production merge, app reinstall, permission grant, call, message send, or loc
 - Added pure `DirectoryBootstrapRoute.kt` plus three tests covering external fallback, active embedded service, and stopping embedded service.
 - Combined fresh `:app:testEmbeddedUnitTest :app:lintEmbedded --offline` run PASS: **70 tests across 25 suites, 0 failures, 0 skipped; lint BUILD SUCCESSFUL**.
 - No signed APK was built or deployed from this remote session because the release-signing environment variables were unavailable. Existing device installations and stored identities remain untouched; do not claim the directory bug is fixed on Redmi or OP7 until a correctly signed APK has been deployed in place and the API sync verified on both devices.
+## Signed build 43 candidate and deployment continuation — November 5, 2026
+
+- Development branch commit `b360d682040d3ec1adb5fbd83a490e84faa0d856` bumped versionCode to 43 and versionName to `0.3.26-route-preview` (installed APK suffix `-embedded`).
+- Recovered the existing local authorized Family Touch PKCS#12 signer. Its public certificate SHA-256 `8b028e6a167011f2d070c333000e23cda90dbc6d6948cc71d83894da4a33ee87` exactly matches the existing build-42 signing certificate. Signing passwords were loaded only in transient process environment and were not logged or committed.
+- First Gradle `:app:packageEmbedded` attempt failed to delete the old APK because a separate SHA-verified v42 backup was reading that file concurrently. After the backup completed, incremental `:app:assembleEmbedded` **BUILD SUCCESSFUL**.
+- New signed APK: package `win.fantest.familytouch.embedded`, versionCode 43, versionName `0.3.26-route-preview-embedded`, 147100478 bytes, SHA-256 `9bb79ef9727fc302308d6c1972c59608ae8919abac07bbfc2db3ab685e8cc010`. `apksigner verify --print-certs` exit 0; signing certificate matches the already-installed APK. `aapt2 dump badging` confirmed code/name.
+- Re-ran `:app:testEmbeddedUnitTest` and `:app:lintEmbedded` after version bump: BUILD SUCCESSFUL; 25 JUnit suites / 70 tests / 0 failed / 0 skipped, Android lint passed.
+- Stored separate SHA-verified build-42 original APK and build-43 signed candidate in MASTER-PC's protected local build-backup directory, outside the Git repository. Neither keystore nor passwords were copied into version control.
+- OP7: preflight on OnePlus 7 GM1903 confirmed authenticated ADB, 202GB free storage, build 42 installed and DND enabled. First `adb install -r` streamed attempt failed with no specific installer code. Non-streaming attempt stalled; it was stopped to conserve power when OP7 battery had declined from 35% to about 26%, unplugged. Agentbox read-back confirmed OP7 still on build 42 with DND enabled. No uninstall, data clear, app downgrade or successful build-43 install occurred.
+- Redmi Pad 2: connected over Wi-Fi and Tailscale; transferred the signed build-43 APK in resumable compressed 2MiB chunks through a temporary token-protected HTTPS tunnel. Final on-Redmi file size 147100478 and SHA-256 exact match. Android Package Installer intent launched (`termux-open`, exit 0). Subsequent Android package-manager read-back showed versionCode **42**, with the original base APK unchanged; user-visible Update/Install confirmation is still required.
+- Removed the temporary transfer tunnel and server after successful checksum verification. Production Family Touch updater and public release channel were not changed.
+- Redmi audio read-back: media volume 0/15; ring and notification 8/15. Android's unprivileged Termux connection cannot change those protected streams; tap Silent plus set both volume sliders to zero on the tablet. Alarm has an Android minimum greater than zero and was not modified.
+- No test chat messages, calls, location sharing, pairing-secret extraction, new privileged access, or forced installation were performed.
+
+### Unresolved acceptance requirements
+
+- On Redmi, approve the in-place Android **Update / Install** prompt. Verify installed package versionCode 43 and installed base.apk hash after confirmation.
+- Recharge OP7 before another large APK transfer; recover the stable ADB transport and perform one in-place build-43 install with SHA and preserved firstInstallTime verification.
+- On both devices, verify the family directory API refresh now succeeds under externally owned Tailscale VPN. Then verify authenticated pairing and non-sensitive synthetic peer messaging / call lifecycle, with user-consented actions as applicable.
+- Confirm visual chat preview hides raw `FTLIVE1:` payloads on updated devices. Maintain draft PR and production HOLD until actual physical acceptance passes.
