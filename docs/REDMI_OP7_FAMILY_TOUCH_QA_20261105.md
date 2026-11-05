@@ -62,3 +62,9 @@ No production merge, app reinstall, permission grant, call, message send, or loc
 - Recharge OP7 before another large APK transfer; recover the stable ADB transport and perform one in-place build-43 install with SHA and preserved firstInstallTime verification.
 - On both devices, verify the family directory API refresh now succeeds under externally owned Tailscale VPN. Then verify authenticated pairing and non-sensitive synthetic peer messaging / call lifecycle, with user-consented actions as applicable.
 - Confirm visual chat preview hides raw `FTLIVE1:` payloads on updated devices. Maintain draft PR and production HOLD until actual physical acceptance passes.
+## Android 16 isolated emulator production-gate continuation
+
+- QA package build 43 and instrumentation package installed only on emulator-5554.
+- Initial 8-test run had three failures caused by shared WorkManager test-job cleanup and obsolete VPN expectations. Corrected tests isolate delayed QA-only work, clean up per test and assert the intended built-in VPN mode. Production application code was unchanged.
+- Revised emulator run: 8/8 PASS. Final run with deliberately wrong-signed same-package/version QA fixture: **9/9 PASS**; no test failures. Test signing key and fixture removed afterward.
+- Raw 9-test emulator report preserved on MASTER-PC outside the repository. See PRODUCTION_RELEASE_GATE_20261105.md for physical acceptance blockers and release policy.
