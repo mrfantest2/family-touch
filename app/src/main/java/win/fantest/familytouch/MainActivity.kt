@@ -54,6 +54,7 @@ import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Contacts
+import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Send
@@ -86,6 +87,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -106,13 +108,16 @@ import java.io.ByteArrayOutputStream
 
 // Dark navy and violet system based on the approved visual concept.
 // Status labels still derive from actual application state.
-private val bg = Color(0xFF0B1223)
-private val surface = Color(0xFF17243B)
-private val accent = Color(0xFFA18AFF)
-private val ink = Color(0xFFF6F6FF)
-private val muted = Color(0xFFADB7D0)
-private val hairline = Color(0xFF293750)
-private val cardSurface = Color(0xFF15213A)
+private val bg get() = FamilyAppearance.tone.background
+private val surface get() = FamilyAppearance.tone.surface
+private val accent get() = FamilyAppearance.tone.accent
+private val ink get() = FamilyAppearance.tone.text
+private val muted get() = FamilyAppearance.tone.secondaryText
+private val hairline get() = FamilyAppearance.tone.divider
+private val cardSurface get() = FamilyAppearance.tone.card
+private val selectedColor get() = FamilyAppearance.tone.selected
+private val controlColor get() = FamilyAppearance.tone.control
+private val sentBubble get() = FamilyAppearance.tone.sentBubble
 private val connectionGreen = Color(0xFF6DE0B6)
 
 class MainActivity : ComponentActivity() {
@@ -190,6 +195,7 @@ class MainActivity : ComponentActivity() {
             isAppearanceLightStatusBars = false
             isAppearanceLightNavigationBars = false
         }
+        FamilyAppearance.init(this)
         FamilyStore.init(this)
         GroupStore.init(this)
         intent.getStringExtra("open_peer_id")?.let { id ->
@@ -207,11 +213,31 @@ class MainActivity : ComponentActivity() {
         catch (ex: Exception) { FamilyStore.lastError = "Service: " + ex.message }
         if (!FamilyStore.needsNicknamePrompt) requestNotificationPermission()
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme(
-                primary = accent, onPrimary = bg, background = bg, surface = surface, onBackground = ink, onSurface = ink,
-                secondary = accent, secondaryContainer = Color(0xFF2A2252),
-                onSecondaryContainer = ink, surfaceContainer = surface, surfaceVariant = Color(0xFF26314D)
-            )) { Surface(modifier = Modifier.fillMaxSize(), color = bg, contentColor = ink) { Box { FamilyPinGate {
+            val palette = FamilyAppearance.tone
+            val scheme = if (FamilyAppearance.dark) darkColorScheme(
+                primary = palette.accent, onPrimary = palette.accentForeground,
+                background = palette.background, surface = palette.surface,
+                onBackground = palette.text, onSurface = palette.text,
+                secondary = palette.accent, secondaryContainer = palette.selected,
+                onSecondaryContainer = palette.text, surfaceContainer = palette.surface,
+                surfaceVariant = palette.control
+            ) else lightColorScheme(
+                primary = palette.accent, onPrimary = palette.accentForeground,
+                background = palette.background, surface = palette.surface,
+                onBackground = palette.text, onSurface = palette.text,
+                secondary = palette.accent, secondaryContainer = palette.sentBubble,
+                onSecondaryContainer = palette.text, surfaceContainer = palette.surface,
+                surfaceVariant = palette.control
+            )
+            SideEffect {
+                window.statusBarColor = palette.surface.toArgb()
+                window.navigationBarColor = palette.background.toArgb()
+                androidx.core.view.WindowInsetsControllerCompat(window, window.decorView).apply {
+                    isAppearanceLightStatusBars = !FamilyAppearance.dark
+                    isAppearanceLightNavigationBars = !FamilyAppearance.dark
+                }
+            }
+            MaterialTheme(colorScheme = scheme) { Surface(modifier = Modifier.fillMaxSize(), color = bg, contentColor = ink) { Box { FamilyPinGate {
                 FamilyTouchUI(requestCallPermissions = { video, callback -> withCallPermissions(video, callback) },
                     onNicknameFinished = { requestNotificationPermission() })
                 FamilyUpdatePrompt()
@@ -315,7 +341,10 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
                             DropdownMenuItem(text = { Text("Shared media") }, onClick = {
                                 chatMenuExpanded = false; chatMenuAction = "media"
                             })
-                            DropdownMenuItem(text = { Text("Lock this conversation") }, onClick = {
+                            DropdownMenuItem(text = { Text(
+                                if (runCatching { ChatSecurity.enabled(context, selectedPeer.id) }
+                                    .getOrDefault(false)) "Unlock / remove chat lock"
+                                else "Lock this conversation") }, onClick = {
                                 chatMenuExpanded = false; showChatSecurityConfig = true
                             })
                         }
@@ -340,8 +369,8 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
         HorizontalDivider(color = hairline, thickness = 0.5.dp)
         if (!networkStatus.connected && !FamilyStore.needsNicknamePrompt &&
             active == null && groupCall == null && incoming == null) {
-            Surface(color = Color(0xFF252340), shape = RoundedCornerShape(16.dp),
-                border = BorderStroke(1.dp, Color(0xFF423B68)),
+            Surface(color = controlColor, shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, hairline),
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically) {
@@ -379,7 +408,10 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
                         requestCallPermissions(video) { CallController.start(peer, video) }
                     }
                     2 -> ContactsPage(contacts, onOpen = { FamilyStore.selectedPeer = it; tab = 0 },
-                        onConnectionSettings = { tab = 3 })
+                        onConnectionSettings = { tab = 4 })
+                    3 -> FamilyGlobePage(contacts, onOpen = {
+                        FamilyStore.selectedPeer = it; tab = 0
+                    })
                     else -> SettingsPage(networkStatus, onRecordings = { recordingsLibrary = true })
                 }
             }
@@ -387,7 +419,8 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
                 val navItems = listOf(Triple("Chats", Icons.Outlined.ChatBubbleOutline, 0),
                     Triple("Calls", Icons.Outlined.Call, 1),
                     Triple("Contacts", Icons.Outlined.Contacts, 2),
-                    Triple("Settings", Icons.Outlined.Settings, 3))
+                    Triple("Globe", Icons.Outlined.Public, 3),
+                    Triple("Settings", Icons.Outlined.Settings, 4))
                 navItems.forEach { (label, icon, idx) ->
                     NavigationBarItem(selected = tab == idx, onClick = { tab = idx; FamilyStore.selectedPeer = null },
                         icon = {
@@ -402,7 +435,7 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
                         }, label = { Text(label, fontSize = 11.sp) },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = accent, selectedTextColor = accent,
-                            indicatorColor = Color(0xFF322755),
+                            indicatorColor = selectedColor,
                             unselectedIconColor = muted, unselectedTextColor = muted))
                 }
             }
@@ -623,6 +656,9 @@ private fun ContactsPage(peers: List<Peer>, onOpen: (String) -> Unit, onConnecti
     val connected = EmbeddedTailnet.status.connected
     var refreshing by remember { mutableStateOf(false) }
     var quickPeer by remember { mutableStateOf<Peer?>(null) }
+    var exportPeer by remember { mutableStateOf<Peer?>(null) }
+    var deletePeer by remember { mutableStateOf<Peer?>(null) }
+    var securityPeer by remember { mutableStateOf<Peer?>(null) }
     var confirmHelp by remember { mutableStateOf<Peer?>(null) }
     var pingResult by remember { mutableStateOf("") }
     quickPeer?.let { selected ->
@@ -645,6 +681,16 @@ private fun ContactsPage(peers: List<Peer>, onOpen: (String) -> Unit, onConnecti
                         } catch (_: Exception) { pingResult = selected.name + " is unreachable" }
                     }
                 }) { Text("Ping this family device") }
+                TextButton(onClick = { quickPeer = null; securityPeer = selected }) {
+                    Text(if (runCatching { ChatSecurity.enabled(context, selected.id) }
+                        .getOrDefault(false)) "Unlock / remove chat lock" else "Lock this conversation")
+                }
+                TextButton(onClick = { quickPeer = null; exportPeer = selected }) {
+                    Text("Export conversation")
+                }
+                TextButton(onClick = { quickPeer = null; deletePeer = selected }) {
+                    Text("Delete local chat history", color = MaterialTheme.colorScheme.error)
+                }
                 TextButton(onClick = { quickPeer = null; confirmHelp = selected }) {
                     Text("SOS — ask for help")
                 }
@@ -660,6 +706,39 @@ private fun ContactsPage(peers: List<Peer>, onOpen: (String) -> Unit, onConnecti
                 Spacer(Modifier.height(12.dp))
             }
         }
+    }
+    securityPeer?.let { chosen ->
+        ChatSecuritySettingsDialog(chosen.id) { securityPeer = null }
+    }
+    exportPeer?.let { chosen ->
+        val count = FamilyStore.messages.count { it.peerId == chosen.id }
+        AlertDialog(onDismissRequest = { exportPeer = null },
+            title = { Text("Export chat with " + chosen.name + "?") },
+            text = { Text("Share up to the last 200 local text messages using Android's share sheet. This may expose private conversations to the app you choose. No credentials or raw location IDs are exported. Messages are not sent until you choose a destination.") },
+            confirmButton = { Button(onClick = {
+                try {
+                    val text = ChatExport.plainText(chosen, FamilyStore.messages, FamilyStore.nickname)
+                    val intent = Intent(Intent.ACTION_SEND).setType("text/plain")
+                        .putExtra(Intent.EXTRA_TEXT, text)
+                    context.startActivity(Intent.createChooser(intent, "Export family chat"))
+                    pingResult = "Prepared " + count.coerceAtMost(200) + " local messages"
+                } catch (ex: Exception) { pingResult = "Export unavailable: " + (ex.message ?: "") }
+                exportPeer = null
+            }) { Text("Open share sheet") } },
+            dismissButton = { TextButton(onClick = { exportPeer = null }) { Text("Cancel") } })
+    }
+    deletePeer?.let { chosen ->
+        AlertDialog(onDismissRequest = { deletePeer = null },
+            title = { Text("Delete local chat history?") },
+            text = { Text("Delete messages with " + chosen.name + " on this device only? This cannot be undone. It does not delete another family member's messages or revoke pairing.") },
+            confirmButton = { Button(onClick = {
+                val removed = FamilyStore.clearConversation(chosen.id)
+                pingResult = "Deleted " + removed + " local messages with " + chosen.name
+                deletePeer = null
+            }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) {
+                Text("Delete on this device")
+            } },
+            dismissButton = { TextButton(onClick = { deletePeer = null }) { Text("Cancel") } })
     }
     confirmHelp?.let { chosen ->
         AlertDialog(onDismissRequest = { confirmHelp = null },
@@ -698,6 +777,8 @@ private fun ContactsPage(peers: List<Peer>, onOpen: (String) -> Unit, onConnecti
             verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Registered family devices", fontWeight = FontWeight.Bold)
+                Text("Hold a contact for options, including ping, export, and chat lock.",
+                    fontSize = 11.sp, color = muted)
                 val statusText = if (connected) FamilyStore.directoryStatus else
                     "Private network disconnected - connect before discovery"
                 val warning = statusText.contains("unavailable", true) ||
@@ -849,7 +930,7 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
                 verticalArrangement = Arrangement.spacedBy(9.dp)) {
                 Text((AttachmentTransport.parse(item.text)?.name ?: item.text).take(130),
                     maxLines = 2, overflow = TextOverflow.Ellipsis, color = ink, fontSize = 14.sp)
-                Row(Modifier.fillMaxWidth().background(Color(0xFF283650), RoundedCornerShape(30.dp)),
+                Row(Modifier.fillMaxWidth().background(controlColor, RoundedCornerShape(30.dp)),
                     horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
                     ReactionPolicy.choices.forEach { emoji ->
                         Box(Modifier.size(45.dp).clickable {
@@ -1141,7 +1222,7 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
                     val textColor = ink
                     val secondaryColor = muted
                     val actionColor = accent
-                    val bubbleColor = if (msg.outgoing) Color(0xFF473A8F) else surface
+                    val bubbleColor = if (msg.outgoing) sentBubble else surface
                     if (!msg.outgoing) DarkChatTail(false, bubbleColor)
                     Column(Modifier.widthIn(max = 310.dp)
                         .pointerInput(msg.id) { detectTapGestures(onLongPress = { actionMessage = msg }) }
@@ -1180,7 +1261,7 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
                                     })
                                 } else if (attachment.mime.startsWith("video/")) {
                                     Box(Modifier.size(width = 210.dp, height = 110.dp)
-                                        .background(Color(0xFF283650), RoundedCornerShape(8.dp))
+                                        .background(controlColor, RoundedCornerShape(8.dp))
                                         .clickable { viewedMedia = attachment },
                                         contentAlignment = Alignment.Center) {
                                         Icon(Icons.Outlined.Videocam, "Play video", tint = accent)
@@ -1274,7 +1355,7 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
             InlineVoiceComposer(onDismiss = { voiceNote = false }, onSend = sendVoiceNote)
         } else Row(Modifier.fillMaxWidth().background(bg).padding(horizontal = 6.dp, vertical = 6.dp),
             verticalAlignment = Alignment.Bottom) {
-            Row(Modifier.weight(1f).background(Color(0xFF283650), RoundedCornerShape(27.dp))
+            Row(Modifier.weight(1f).background(controlColor, RoundedCornerShape(27.dp))
                 .heightIn(min = 50.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box {
                     IconButton(modifier = Modifier.size(40.dp), onClick = { emojiPickerOpen = true }) {
@@ -1387,6 +1468,7 @@ private fun SettingsPage(networkStatus: VpnConnectionStatus, onRecordings: () ->
             color = muted, fontSize = 12.sp)
         HorizontalDivider(color = Color(0xFF24415C))
         VpnSettings()
+        FamilyAppearanceSettings()
         FamilyPinSettings()
         OutlinedButton(onClick = {
             try {
@@ -1427,7 +1509,7 @@ private fun CallControls(onHangup: () -> Unit, modifier: Modifier = Modifier) {
                 FilledIconButton(onClick = { CallController.selectSpeakerRoute(!speaker) },
                     modifier = Modifier.size(56.dp),
                     colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = Color(0xFF283650), contentColor = ink)) {
+                        containerColor = controlColor, contentColor = ink)) {
                     Icon(Icons.Outlined.VolumeUp,
                         if (speaker) "Disable speaker" else "Enable speaker")
                 }
@@ -1437,7 +1519,7 @@ private fun CallControls(onHangup: () -> Unit, modifier: Modifier = Modifier) {
                 FilledIconButton(onClick = { CallController.toggleMicrophoneMute(!isMuted) },
                     modifier = Modifier.size(56.dp),
                     colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = Color(0xFF283650), contentColor = ink)) {
+                        containerColor = controlColor, contentColor = ink)) {
                     Icon(if (isMuted) Icons.Outlined.Mic else Icons.Outlined.MicOff,
                         if (isMuted) "Unmute microphone" else "Mute microphone")
                 }
