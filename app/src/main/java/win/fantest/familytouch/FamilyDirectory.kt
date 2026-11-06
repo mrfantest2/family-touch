@@ -86,14 +86,22 @@ internal object FamilyDirectory {
                 return JSONObject(String(data, Charsets.UTF_8))
             }
         }
-        // Enrollment must travel over the physical underlay. This app is its own
-        // per-app VPN client; default URL.openConnection() may route the HTTPS
-        // bootstrap request *into the not-yet-authenticated VPN* and deadlock.
-        // Network.openConnection keeps normal TLS hostname/certificate checks.
-        val connectivity = context.getSystemService(ConnectivityManager::class.java)
-        val physical = selectedPhysicalNetwork(connectivity)
-            ?: throw java.io.IOException("No physical internet network for enrollment")
-        val connection = physical.openConnection(URL(base + path)) as HttpsURLConnection
+        // Bootstrap must bypass Family Touch's own active VPN, or an unprovisioned
+        // embedded tunnel may intercept HTTPS before authentication. When the
+        // embedded service is inactive, however, Android may be using an already
+        // working external Tailscale VPN: use the default HTTPS route instead of
+        // binding an unrelated physical network that can reject app sockets.
+        // Both paths retain normal hostname/TLS certificate verification.
+        val url = URL(base + path)
+        val connection = if (DirectoryBootstrapRoute.usePhysicalUnderlay(
+                EmbeddedTailnet.serviceActive, EmbeddedTailnet.stopping)) {
+            val physical = selectedPhysicalNetwork(
+                context.getSystemService(ConnectivityManager::class.java))
+                ?: throw java.io.IOException("No physical internet network for enrollment")
+            physical.openConnection(url) as HttpsURLConnection
+        } else {
+            url.openConnection() as HttpsURLConnection
+        }
         try {
             connection.requestMethod = "POST"
             connection.instanceFollowRedirects = false

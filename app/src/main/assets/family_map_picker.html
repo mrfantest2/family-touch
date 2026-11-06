@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+ integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoL8oTyr8PEbN4=" crossorigin="anonymous">
+<style>
+html,body,#map{width:100%;height:100%;margin:0;padding:0;background:#263a40}
+.leaflet-container{background:#263a40}
+#fallback{position:absolute;top:12px;right:12px;background:#1a2c34;color:#eff9f3;border-radius:12px;padding:5px 9px;font:12px sans-serif;pointer-events:none;z-index:800}
+</style></head><body><div id="map"></div><div id="fallback">Tap map or drag pin</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+ integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
+<script>
+(function(){
+"use strict";
+var lat=Number("__LAT__"),lon=Number("__LON__");
+if(!Number.isFinite(lat)||!Number.isFinite(lon)){lat=0;lon=0;}
+if(!window.L){document.getElementById("fallback").textContent="Map needs internet";return;}
+var map=L.map("map",{zoomControl:true}).setView([lat,lon],15);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{
+  maxZoom:19,attribution:"&copy; OpenStreetMap contributors",updateWhenIdle:true
+}).addTo(map);
+var pin=L.marker([lat,lon],{draggable:true}).addTo(map);
+function selected(x){var a=x.lat,b=x.lng;
+ if(!Number.isFinite(a)||!Number.isFinite(b)||Math.abs(a)>90||Math.abs(b)>180)return;
+ pin.setLatLng([a,b]);if(window.FamilyMapBridge)window.FamilyMapBridge.selected(a,b);
+}
+map.on("click",function(e){selected(e.latlng);});
+pin.on("dragend",function(e){selected(e.target.getLatLng());});
+setTimeout(function(){map.invalidateSize();},200);
+})();
+</script></body></html>
