@@ -24,7 +24,7 @@ import androidx.compose.ui.unit.sp
 internal fun DarkChatWallpaper(modifier: Modifier = Modifier) {
     Canvas(modifier) {
         val unit = 94.dp.toPx()
-        val ink = Color(0xFF779099).copy(alpha = .075f)
+        val ink = Color(0xFFA6A0DB).copy(alpha = .065f)
         val rows = (size.height / unit).toInt() + 2
         val cols = (size.width / unit).toInt() + 2
         for (r in 0..rows) for (c in 0..cols) {
@@ -74,7 +74,7 @@ internal fun DarkChatReceipt(sent: Boolean, delivered: Boolean, read: Boolean) {
 @Composable
 internal fun DarkChatSecurityNotice() {
     Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
-        Surface(color = Color(0xFF182229), shape = RoundedCornerShape(9.dp)) {
+        Surface(color = Color(0xFF1B2540), shape = RoundedCornerShape(9.dp)) {
             Text("🔒 Messages and calls use your private family connection",
                 color = Color(0xFFE8C994), fontSize = 11.sp,
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp))
