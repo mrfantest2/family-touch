@@ -9,6 +9,10 @@ internal object DirectorySecurity {
     fun canonical(method: String, path: String, device: String, time: String, nonce: String, body: ByteArray) =
         listOf(method, path, device, time, nonce, hex(java.security.MessageDigest.getInstance("SHA-256").digest(body))).joinToString("\n")
     fun hex(bytes: ByteArray) = bytes.joinToString("") { "%02x".format(it) }
+    /** Constant-time comparison for pairing secrets and per-peer tokens. */
+    fun secretsMatch(provided: String, expected: String): Boolean =
+        expected.isNotEmpty() && java.security.MessageDigest.isEqual(
+            provided.toByteArray(Charsets.UTF_8), expected.toByteArray(Charsets.UTF_8))
     fun validChallenge(value: String) = value.matches(Regex("[a-f0-9]{64}"))
     fun validateRoster(peers: List<Peer>, self: String): List<Peer> {
         require(peers.size <= 64)
@@ -21,4 +25,9 @@ internal object DirectorySecurity {
         }
         return peers
     }
+}
+
+/** Re-pairing is allowed only for a new device or the same tailnet address that already owns the identity. */
+internal object PairingPolicy {
+    fun mayPair(existingIp: String?, requestIp: String): Boolean = existingIp == null || existingIp == requestIp
 }

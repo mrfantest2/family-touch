@@ -29,6 +29,8 @@ class PeerService : Service() {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var listener: ServerSocket? = null
     private var listenJob: Job? = null
+    /** Bounds concurrent inbound connections so one tailnet node cannot exhaust the service. */
+    private val handlerPermits = kotlinx.coroutines.sync.Semaphore(MAX_INBOUND)
     private val channel = "familytouch_status_silent_v3"
     private val messageChannel = "familytouch_messages_heads_up_v4"
     private val callChannel = "familytouch_calls_v3"
@@ -119,7 +121,9 @@ class PeerService : Service() {
                     while (isActive && EmbeddedTailnet.status.let { it.connected && it.address == address }) {
                         try {
                             val socket = server.accept()
-                            launch { handle(socket) }
+                            if (handlerPermits.tryAcquire()) {
+                                launch { try { handle(socket) } finally { handlerPermits.release() } }
+                            } else runCatching { socket.close() }
                         } catch (_: SocketTimeoutException) { /* Recheck VPN address and ownership. */ }
                     }
                 }
@@ -222,15 +226,18 @@ class PeerService : Service() {
                 val type = json.getString("type")
                 val secret = json.getString("secret")
                 val result = if (type == "pair") {
-                    require(secret == FamilyStore.pairingSecret) { "Invitation secret is incorrect" }
+                    require(DirectorySecurity.secretsMatch(secret, FamilyStore.pairingSecret)) { "Invitation secret is incorrect" }
                     require(id != FamilyStore.deviceId) { "Cannot pair device with itself" }
+                    // An invitation holder on a different tailnet device must never take over an
+                    // existing contact's identity (that would redirect its messages and calls).
+                    require(PairingPolicy.mayPair(FamilyStore.find(id)?.ip, ip)) { "Device is already paired" }
                     val newToken = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
                         .joinToString("") { "%02x".format(it) }
                     FamilyStore.upsert(Peer(id, json.optString("nick", "Family device").take(36), ip, newToken))
                     JSONObject().put("id", FamilyStore.deviceId).put("nick", FamilyStore.nickname).put("secret", newToken)
                 } else {
                     val peer = FamilyStore.find(id)
-                    require(peer != null && secret == peer.secret) { "Device is not paired" }
+                    require(peer != null && DirectorySecurity.secretsMatch(secret, peer.secret)) { "Device is not paired" }
                     if (ip != peer.ip || json.optString("nick") != peer.name) {
                         FamilyStore.upsert(peer.copy(ip = ip, name = json.optString("nick", peer.name).take(36)))
                     }
@@ -318,8 +325,14 @@ class PeerService : Service() {
                             }
                             JSONObject()
                         }
-                        "offer", "answer", "ice", "hangup" -> CallController.receive(type, id, json) { who ->
-                            showNotification("Incoming Family Touch call", who, true)
+                        "offer", "answer", "ice", "hangup" -> {
+                            // WebRTC objects and call state belong to the main thread.
+                            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                CallController.receive(type, id, json) { who ->
+                                    showNotification("Incoming Family Touch call", who, true)
+                                }
+                            }
+                            JSONObject()
                         }
                         else -> error("Unsupported request")
                     }
@@ -347,4 +360,6 @@ class PeerService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    private companion object { const val MAX_INBOUND = 32 }
 }
