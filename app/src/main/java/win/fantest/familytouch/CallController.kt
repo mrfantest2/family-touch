@@ -43,6 +43,10 @@ import org.webrtc.VideoTrack
  */
 object CallController {
     private val io = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    /** Call state and WebRTC objects are owned by the main thread; timers and failures hop back here. */
+    private val main = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    /** Guards pendingIce/hasRemoteDescription, which the WebRTC signaling thread also touches. */
+    private val iceLock = Any()
     private lateinit var context: Context
     private var ready = false
     private lateinit var factory: PeerConnectionFactory
@@ -184,8 +188,7 @@ object CallController {
         closing = false
         routeAudioToCall(video)
         currentPeer = peer
-        pendingIce.clear()
-        hasRemoteDescription = false
+        synchronized(iceLock) { pendingIce.clear(); hasRemoteDescription = false }
         val config = PeerConnection.RTCConfiguration(emptyList())
         config.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
         connection = factory.createPeerConnection(config, object : PeerConnection.Observer {
@@ -254,10 +257,12 @@ object CallController {
             check(GroupCallController.session == null && GroupCallController.incoming == null) { "Already in a group call" }
             prepare(peer, video)
             beginLog(video, true)
-            FamilyStore.activeCall = CallInvite(peer.id, video, outgoing = true, sessionId = UUID.randomUUID().toString())
-            io.launch {
+            val session = UUID.randomUUID().toString()
+            FamilyStore.activeCall = CallInvite(peer.id, video, outgoing = true, sessionId = session)
+            main.launch {
                 delay(45_000L)
-                if (currentPeer?.id == peer.id && connectedSinceMs == null &&
+                // Only time out this exact call, never a newer call to the same person.
+                if (FamilyStore.activeCall?.sessionId == session && connectedSinceMs == null &&
                     FamilyStore.activeCall?.outgoing == true) {
                     hangup()
                     FamilyStore.lastError = "No answer from " + peer.name
@@ -270,11 +275,15 @@ object CallController {
                         override fun onCreateSuccess(sdp: SessionDescription?) {}
                         override fun onCreateFailure(error: String?) {}
                         override fun onSetSuccess() {
-                            signal("offer", JSONObject().put("sdp", sdp.description).put("video", video))
+                            signal("offer", JSONObject().put("sdp", sdp.description).put("video", video)) { failure ->
+                                offerFailed(peer, session, failure)
+                            }
                         }
                         override fun onSetFailure(error: String?) {
-                            FamilyStore.lastError = "Unable to start call: " + error.orEmpty()
-                            hangup()
+                            main.launch {
+                                FamilyStore.lastError = "Unable to start call: " + error.orEmpty()
+                                hangup()
+                            }
                         }
                     }, sdp)
                 }
@@ -292,8 +301,10 @@ object CallController {
             RingtonePlayer.stop()
             prepare(peer, invitation.isVideo)
             beginLog(invitation.isVideo, false)
-            pendingIce.addAll(earlyIce.remove(peer.id + "\n" + invitation.sessionId).orEmpty())
-            pendingIce.addAll(earlyIce.remove(peer.id + "\n").orEmpty())
+            synchronized(iceLock) {
+                pendingIce.addAll(earlyIce.remove(peer.id + "\n" + invitation.sessionId).orEmpty())
+                pendingIce.addAll(earlyIce.remove(peer.id + "\n").orEmpty())
+            }
             FamilyStore.activeCall = invitation.copy(outgoing = false)
             FamilyStore.incomingCall = null
             setRemote(SessionDescription(SessionDescription.Type.OFFER, invitation.offer)) {
@@ -307,8 +318,10 @@ object CallController {
                                 signal("answer", JSONObject().put("sdp", sdp.description))
                             }
                             override fun onSetFailure(error: String?) {
-                                FamilyStore.lastError = "Unable to answer call: " + error.orEmpty()
-                                hangup()
+                                main.launch {
+                                    FamilyStore.lastError = "Unable to answer call: " + error.orEmpty()
+                                    hangup()
+                                }
                             }
                         }, sdp)
                     }
@@ -325,9 +338,12 @@ object CallController {
             override fun onCreateSuccess(sdp: SessionDescription?) {}
             override fun onCreateFailure(error: String?) {}
             override fun onSetSuccess() {
-                hasRemoteDescription = true
-                pendingIce.forEach { connection?.addIceCandidate(it) }
-                pendingIce.clear()
+                // Drain atomically so a candidate arriving concurrently is never dropped.
+                val drained = synchronized(iceLock) {
+                    hasRemoteDescription = true
+                    pendingIce.toList().also { pendingIce.clear() }
+                }
+                drained.forEach { connection?.addIceCandidate(it) }
                 then()
             }
             override fun onSetFailure(error: String?) { FamilyStore.lastError = error.orEmpty() }
@@ -341,23 +357,47 @@ object CallController {
         override fun onSetFailure(error: String?) { FamilyStore.lastError = error.orEmpty() }
     }
 
-    private fun signal(type: String, body: JSONObject) {
+    private fun signal(type: String, body: JSONObject, onFailure: ((Exception) -> Unit)? = null) {
         val peer = currentPeer ?: return
         FamilyStore.activeCall?.sessionId?.takeIf { it.isNotBlank() }?.let { body.put("callSession", it) }
-        io.launch { try { Tailnet.send(peer, type, body) } catch (e: Exception) { FamilyStore.lastError = "Call signaling: " + e.message } }
+        io.launch {
+            try { Tailnet.send(peer, type, body) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) {
+                if (onFailure != null) onFailure(e)
+                else main.launch { FamilyStore.lastError = "Call signaling: " + e.message }
+            }
+        }
     }
+
+    /** The offer never reached the other phone: end now instead of ringing for 45 seconds. */
+    private fun offerFailed(peer: Peer, session: String, failure: Exception) {
+        main.launch {
+            if (FamilyStore.activeCall?.sessionId != session || connectedSinceMs != null) return@launch
+            clear(false)
+            FamilyStore.lastError = if (failure.message == BUSY) peer.name + " is on another call. Try again later."
+                else peer.name + " could not be reached. Make sure their phone is on and connected to the private network."
+        }
+    }
+
+    internal const val BUSY = "busy"
 
     fun receive(type: String, peerId: String, data: JSONObject, alert: (String) -> Unit) {
         when (type) {
             "offer" -> {
                 if (FamilyStore.activeCall != null || FamilyStore.incomingCall != null ||
-                    GroupCallController.session != null || GroupCallController.incoming != null) return
+                    GroupCallController.session != null || GroupCallController.incoming != null) {
+                    // A repeated offer for the call already ringing is harmless; anything else is busy.
+                    if (FamilyStore.incomingCall?.let { it.peerId == peerId &&
+                            it.sessionId == data.optString("callSession") } == true) return
+                    throw IllegalStateException(BUSY)
+                }
                 val peer = FamilyStore.find(peerId) ?: return
                 FamilyStore.incomingCall = CallInvite(peerId, data.optBoolean("video"), data.getString("sdp"),
                     sessionId = data.optString("callSession"))
                 alert(peer.name + " is calling")
                 val pendingOffer = FamilyStore.incomingCall
-                io.launch {
+                main.launch {
                     delay(45_000L)
                     if (FamilyStore.incomingCall == pendingOffer && FamilyStore.activeCall == null) {
                         RingtonePlayer.stop()
@@ -385,8 +425,11 @@ object CallController {
                 if (activeSession != null && session.isNotBlank() && activeSession != session) return
                 val candidate = IceCandidate(data.optString("mid"), data.getInt("mLine"), data.getString("candidate"))
                 if (currentPeer?.id == peerId && ready) {
-                    if (hasRemoteDescription) connection?.addIceCandidate(candidate)
-                    else if (pendingIce.size < 128) pendingIce.add(candidate)
+                    val addNow = synchronized(iceLock) {
+                        if (hasRemoteDescription) true
+                        else { if (pendingIce.size < 128) pendingIce.add(candidate); false }
+                    }
+                    if (addNow) connection?.addIceCandidate(candidate)
                 } else {
                     val key = peerId + "\n" + session
                     if (earlyIce.size < 32) {
@@ -442,8 +485,7 @@ object CallController {
         connection?.close(); connection?.dispose(); connection = null
         restoreAudio()
         currentPeer = null
-        hasRemoteDescription = false
-        pendingIce.clear()
+        synchronized(iceLock) { hasRemoteDescription = false; pendingIce.clear() }
         connectedSinceMs = null
         FamilyStore.activeCall = null
         FamilyStore.incomingCall = null

@@ -37,7 +37,7 @@ object FamilyStore {
         return chat.count { !it.outgoing && it.peerId == peerId && !it.read && it.time > viewed }
     }
     fun unreadTotal(): Int = contacts.sumOf { unreadFor(it.id) }
-    fun markChatViewed(peerId: String) {
+    @Synchronized fun markChatViewed(peerId: String) {
         chatViewedAt[peerId] = System.currentTimeMillis()
         val obj = JSONObject()
         chatViewedAt.forEach { (key, value) -> obj.put(key, value) }
@@ -53,7 +53,7 @@ object FamilyStore {
         context.getSharedPreferences("identity", Context.MODE_PRIVATE).edit()
             .putString("profilePhoto", encoded).apply()
     }
-    fun setPeerPhoto(peerId: String, encoded: String) {
+    @Synchronized fun setPeerPhoto(peerId: String, encoded: String) {
         if (encoded.length > 26000 || find(peerId) == null) return
         peerPhotos[peerId] = encoded
         val root = JSONObject()
@@ -135,7 +135,7 @@ object FamilyStore {
         } catch (_: Exception) { lastError = "Some call history could not be loaded" }
     }
 
-    fun addCallLog(record: CallLogRecord) {
+    @Synchronized fun addCallLog(record: CallLogRecord) {
         if (calls.any { it.id == record.id }) return
         calls.add(0, record)
         if (calls.size > 1000) calls.removeAt(calls.lastIndex)
@@ -170,7 +170,7 @@ object FamilyStore {
 
     fun find(id: String): Peer? = peers.firstOrNull { it.id == id }
 
-    fun applyDirectory(roster: List<Peer>) {
+    @Synchronized fun applyDirectory(roster: List<Peer>) {
         DirectorySecurity.validateRoster(roster, deviceId)
         val prefs = context.getSharedPreferences("identity", Context.MODE_PRIVATE)
         val managed = prefs.getStringSet("directoryPeers", emptySet()).orEmpty()
@@ -182,7 +182,7 @@ object FamilyStore {
         prefs.edit().putStringSet("directoryPeers", ids).putString("peers", a.toString()).apply()
     }
 
-    fun upsert(peer: Peer) {
+    @Synchronized fun upsert(peer: Peer) {
         if (peer.id == deviceId || peer.ip.isBlank()) return
         val index = peers.indexOfFirst { it.id == peer.id }
         if (index < 0) peers.add(peer) else peers[index] = peer
@@ -191,7 +191,7 @@ object FamilyStore {
         context.getSharedPreferences("identity", Context.MODE_PRIVATE).edit().putString("peers", a.toString()).apply()
     }
 
-    fun addChat(item: ChatItem) {
+    @Synchronized fun addChat(item: ChatItem) {
         if (chat.any { it.id == item.id }) return
         chat.add(item)
         if (chat.size > 5000) {
@@ -201,15 +201,15 @@ object FamilyStore {
         persistMessages()
     }
 
-    fun delivered(id: String) {
+    @Synchronized fun delivered(id: String) {
         val index = chat.indexOfFirst { it.id == id }
         if (index >= 0) { chat[index] = chat[index].copy(sent = true, delivered = true); persistMessages() }
     }
-    fun sent(id: String) {
+    @Synchronized fun sent(id: String) {
         val index = chat.indexOfFirst { it.id == id }
         if (index >= 0) { chat[index] = chat[index].copy(sent = true); persistMessages() }
     }
-    fun markRead(peerId: String, ids: Set<String>) {
+    @Synchronized fun markRead(peerId: String, ids: Set<String>) {
         var changed = false
         for (i in chat.indices) {
             val item = chat[i]
@@ -219,7 +219,7 @@ object FamilyStore {
         }
         if (changed) persistMessages()
     }
-    fun acknowledgeIncomingRead(peerId: String, ids: Set<String>) {
+    @Synchronized fun acknowledgeIncomingRead(peerId: String, ids: Set<String>) {
         var changed = false
         for (i in chat.indices) {
             val item = chat[i]
@@ -231,7 +231,7 @@ object FamilyStore {
     }
 
     /** Reuse one message bubble for updates to an authenticated live-location session. */
-    internal fun upsertLiveLocation(fix: LiveLocationFix, peerId: String, outgoing: Boolean): Boolean {
+    @Synchronized internal fun upsertLiveLocation(fix: LiveLocationFix, peerId: String, outgoing: Boolean): Boolean {
         val text = LiveLocationProtocol.encode(fix)
         val now = System.currentTimeMillis()
         if (!LiveLocationProtocol.validWire(fix, now)) return false
@@ -252,21 +252,21 @@ object FamilyStore {
     }
 
     /** Local-only action; never claims a remote deletion. */
-    fun deleteForMe(messageId: String): Boolean {
+    @Synchronized fun deleteForMe(messageId: String): Boolean {
         val removed = chat.removeAll { it.id == messageId }
         if (removed) persistMessages()
         return removed
     }
 
     /** Clear the visible conversation on this device only. */
-    fun clearConversation(peerId: String): Int {
+    @Synchronized fun clearConversation(peerId: String): Int {
         val before = chat.size
         chat.removeAll { it.peerId == peerId }
         if (chat.size != before) persistMessages()
         return before - chat.size
     }
 
-    fun editMessageLocal(id: String, replacement: String, version: Long): Boolean {
+    @Synchronized fun editMessageLocal(id: String, replacement: String, version: Long): Boolean {
         val index = chat.indexOfFirst { it.id == id }
         if (index < 0 || chat[index].deletedForEveryone ||
             chat[index].editedAt >= version || replacement.length !in 1..6000) return false
@@ -275,7 +275,7 @@ object FamilyStore {
         return true
     }
 
-    fun deleteForEveryoneLocal(id: String, version: Long): Boolean {
+    @Synchronized fun deleteForEveryoneLocal(id: String, version: Long): Boolean {
         val index = chat.indexOfFirst { it.id == id }
         if (index < 0 || chat[index].editedAt > version) return false
         chat[index] = chat[index].copy(text = "", deletedForEveryone = true, editedAt = version)
@@ -284,7 +284,7 @@ object FamilyStore {
     }
 
     /** Backup import is merge-only and never overwrites device identity or credentials. */
-    fun mergeBackupMessages(items: List<ChatItem>): Int {
+    @Synchronized fun mergeBackupMessages(items: List<ChatItem>): Int {
         require(items.size <= 5000)
         val existing = chat.map { it.id }.toMutableSet()
         var count = 0
@@ -298,9 +298,27 @@ object FamilyStore {
         return count
     }
 
+    /**
+     * Messages are written on one background thread and coalesced: a burst of
+     * receipts or incoming messages produces one JSON write of the latest state
+     * instead of re-serializing up to 5000 messages on the caller's thread each time.
+     */
+    private val persistExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { task ->
+        Thread(task, "FamilyStorePersist").apply { isDaemon = true }
+    }
+    private val messagesDirty = java.util.concurrent.atomic.AtomicBoolean(false)
+
     private fun persistMessages() {
+        if (!messagesDirty.compareAndSet(false, true)) return
+        persistExecutor.execute {
+            messagesDirty.set(false)
+            writeMessages(synchronized(FamilyStore) { chat.toList() })
+        }
+    }
+
+    private fun writeMessages(snapshot: List<ChatItem>) {
         val a = JSONArray()
-        chat.forEach { m -> a.put(JSONObject().put("id", m.id).put("peer", m.peerId).put("outgoing", m.outgoing)
+        snapshot.forEach { m -> a.put(JSONObject().put("id", m.id).put("peer", m.peerId).put("outgoing", m.outgoing)
             .put("text", m.text).put("time", m.time).put("delivered", m.delivered).put("senderId", m.senderId)
             .put("sent", m.sent).put("read", m.read)
             .put("editedAt", m.editedAt).put("deletedForEveryone", m.deletedForEveryone)) }
