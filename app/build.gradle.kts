@@ -12,8 +12,8 @@ android {
         applicationId = "win.fantest.familytouch"
         minSdk = 29
         targetSdk = 36
-        versionCode = 40
-        versionName = "0.3.23-chat-lock-privacy"
+        versionCode = 47
+        versionName = "0.3.30-classic-green-updater"
         buildConfigField("boolean", "EMBEDDED_VPN", "true")
         buildConfigField("boolean", "ADMIN_APP", "false")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

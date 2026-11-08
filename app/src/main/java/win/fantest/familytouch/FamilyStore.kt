@@ -230,6 +230,27 @@ object FamilyStore {
         if (changed) persistMessages()
     }
 
+    /** Reuse one message bubble for updates to an authenticated live-location session. */
+    internal fun upsertLiveLocation(fix: LiveLocationFix, peerId: String, outgoing: Boolean): Boolean {
+        val text = LiveLocationProtocol.encode(fix)
+        val now = System.currentTimeMillis()
+        if (!LiveLocationProtocol.validWire(fix, now)) return false
+        val index = chat.indexOfFirst { it.id == fix.sessionId }
+        if (index < 0) {
+            addChat(ChatItem(fix.sessionId, peerId, outgoing, text, now,
+                delivered = !outgoing))
+            return true
+        }
+        val existing = chat[index]
+        val previous = LiveLocationProtocol.parse(existing.text) ?: return false
+        if (existing.peerId != peerId || existing.outgoing != outgoing ||
+            previous.expiresAt != fix.expiresAt || (previous.ended && !fix.ended)) return false
+        if (previous == fix) return true
+        chat[index] = existing.copy(text = text)
+        persistMessages()
+        return true
+    }
+
     /** Local-only action; never claims a remote deletion. */
     fun deleteForMe(messageId: String): Boolean {
         val removed = chat.removeAll { it.id == messageId }

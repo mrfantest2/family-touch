@@ -64,34 +64,25 @@ internal fun ChatImageThumbnail(info: AttachmentTransport.Info, size: Dp = 210.d
     }
 }
 
-/** A schematic card, not a street map. Coordinates are opened in the installed Maps application. */
+/** A real online map thumbnail with clickable navigation; not a mock grid. */
 @Composable
 internal fun ChatLocationPreview(url: String, modifier: Modifier = Modifier, open: () -> Unit) {
     val raw = url.substringAfter("?q=", "")
     val parts = raw.split(",")
     val lat = parts.getOrNull(0)?.toDoubleOrNull()
     val lon = parts.getOrNull(1)?.toDoubleOrNull()
-    val valid = lat != null && lon != null && lat in -90.0..90.0 && lon in -180.0..180.0
-    Column(modifier.widthIn(max = 260.dp).clickable(onClick = open)) {
-        Box(Modifier.fillMaxWidth().height(108.dp)
-            .background(Color(0xFF233C3C), RoundedCornerShape(9.dp)), contentAlignment = Alignment.Center) {
-            Canvas(Modifier.fillMaxSize()) {
-                val ink = Color(0xFF618E88).copy(alpha = .48f)
-                for (i in 0..5) {
-                    val x = size.width * i / 5f
-                    drawLine(ink, Offset(x, 0f), Offset(x + size.width * .22f, size.height), 2.dp.toPx())
-                }
-                for (i in 0..4) {
-                    val y = size.height * i / 4f
-                    drawLine(ink, Offset(0f, y), Offset(size.width, y + size.height * .13f), 3.dp.toPx())
-                }
-                drawCircle(Color(0xFF00A884).copy(alpha = .23f), 19.dp.toPx(), center)
-            }
-            Icon(Icons.Outlined.Place, "Shared location", Modifier.size(34.dp), tint = Color(0xFF60E2B7))
+    Column(modifier.widthIn(max = 260.dp)) {
+        if (lat != null && lon != null && LiveLocationProtocol.validCoordinates(lat, lon))
+            StreetMapPreview(lat, lon)
+        else Box(Modifier.fillMaxWidth().height(108.dp).background(
+            Color(0xFF233C3C), RoundedCornerShape(9.dp)),
+            contentAlignment = Alignment.Center) {
+            Icon(Icons.Outlined.Place, "Shared location", Modifier.size(34.dp),
+                tint = Color(0xFF60E2B7))
         }
         Spacer(Modifier.height(5.dp))
-        Text("Shared location", color = Color(0xFFE9EDEF), fontWeight = FontWeight.Medium)
-        Text(if (valid) "View coordinates in Maps" else "Open shared location",
+        Text("Shared map pin", color = Color(0xFFE9EDEF), fontWeight = FontWeight.Medium)
+        Text("Open in Maps", modifier = Modifier.clickable(onClick = open),
             color = Color(0xFF87C7B8), fontSize = 12.sp)
     }
 }

@@ -303,6 +303,15 @@ class PeerService : Service() {
                             kotlinx.coroutines.withContext(Dispatchers.Main) { MessageMutations.receive(id, json) }
                             JSONObject()
                         }
+                        "live_location" -> {
+                            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                val session = json.getString("sessionId")
+                                val isFirst = FamilyStore.messages.none { it.id == session }
+                                LiveLocationReceiver.receive(id, json)
+                                if (isFirst) showNotification(peer.name, "Shared live location", peerId = id)
+                            }
+                            JSONObject()
+                        }
                         "group_call_invite", "group_call_join", "group_call_join_ack", "group_call_offer", "group_call_answer", "group_call_ice", "group_call_leave" -> {
                             kotlinx.coroutines.withContext(Dispatchers.Main) {
                                 GroupCallController.receive(type, id, json) { who -> showNotification("Incoming Family Touch group call", who, true) }

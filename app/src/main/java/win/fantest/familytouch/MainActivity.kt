@@ -66,6 +66,9 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.MicOff
+import androidx.compose.material.icons.outlined.VolumeUp
+import androidx.compose.material.icons.outlined.CallEnd
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.InsertDriveFile
 import androidx.compose.material.icons.outlined.Photo
@@ -82,6 +85,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -100,11 +105,19 @@ import java.util.UUID
 import java.util.Locale
 import java.io.ByteArrayOutputStream
 
-private val bg = Color(0xFF0B141A)
-private val surface = Color(0xFF202C33)
-private val accent = Color(0xFF00A884)
-private val ink = Color(0xFFE9EDEF)
-private val muted = Color(0xFF8696A0)
+// Dark navy and violet system based on the approved visual concept.
+// Status labels still derive from actual application state.
+private val bg get() = FamilyAppearance.tone.background
+private val surface get() = FamilyAppearance.tone.surface
+private val accent get() = FamilyAppearance.tone.accent
+private val ink get() = FamilyAppearance.tone.text
+private val muted get() = FamilyAppearance.tone.secondaryText
+private val hairline get() = FamilyAppearance.tone.divider
+private val cardSurface get() = FamilyAppearance.tone.card
+private val selectedColor get() = FamilyAppearance.tone.selected
+private val controlColor get() = FamilyAppearance.tone.control
+private val sentBubble get() = FamilyAppearance.tone.sentBubble
+private val connectionGreen = Color(0xFF6DE0B6)
 
 class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
@@ -175,8 +188,8 @@ class MainActivity : ComponentActivity() {
         }
         // Standard app: light/white header uses dark Android system icons.
         // Admin's separate branch above retains its existing system-bar behavior.
-        window.statusBarColor = android.graphics.Color.rgb(32,44,51)
-        window.navigationBarColor = android.graphics.Color.rgb(11,20,26)
+        window.statusBarColor = android.graphics.Color.rgb(13,19,38)
+        window.navigationBarColor = android.graphics.Color.rgb(10,17,34)
         androidx.core.view.WindowInsetsControllerCompat(window, window.decorView).apply {
             isAppearanceLightStatusBars = false
             isAppearanceLightNavigationBars = false
@@ -198,15 +211,38 @@ class MainActivity : ComponentActivity() {
         catch (ex: Exception) { FamilyStore.lastError = "Service: " + ex.message }
         if (!FamilyStore.needsNicknamePrompt) requestNotificationPermission()
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme(
-                primary = accent, onPrimary = Color(0xFF0B141A), background = bg, surface = surface, onBackground = ink, onSurface = ink,
-                secondary = accent, secondaryContainer = Color(0xFF173E37),
-                onSecondaryContainer = ink, surfaceContainer = surface, surfaceVariant = Color(0xFF2A3942)
-            )) { Surface(modifier = Modifier.fillMaxSize(), color = bg, contentColor = ink) { Box { FamilyPinGate {
-                FamilyTouchUI(requestCallPermissions = { video, callback -> withCallPermissions(video, callback) },
-                    onNicknameFinished = { requestNotificationPermission() })
-                FamilyUpdatePrompt()
-            } } } }
+            val palette = FamilyAppearance.tone
+            val scheme = darkColorScheme(
+                primary = palette.accent, onPrimary = palette.accentForeground,
+                background = palette.background, surface = palette.surface,
+                onBackground = palette.text, onSurface = palette.text,
+                secondary = palette.accent, secondaryContainer = palette.selected,
+                onSecondaryContainer = palette.text, surfaceContainer = palette.surface,
+                surfaceVariant = palette.control
+            )
+            SideEffect {
+                window.statusBarColor = palette.surface.toArgb()
+                window.navigationBarColor = palette.background.toArgb()
+                androidx.core.view.WindowInsetsControllerCompat(window, window.decorView).apply {
+                    isAppearanceLightStatusBars = false
+                    isAppearanceLightNavigationBars = false
+                }
+            }
+            MaterialTheme(colorScheme = scheme) {
+                Surface(modifier = Modifier.fillMaxSize(), color = bg, contentColor = ink) {
+                    Box {
+                        FamilyPinGate {
+                            FamilyTouchUI(
+                                requestCallPermissions = { video, callback -> withCallPermissions(video, callback) },
+                                onNicknameFinished = { requestNotificationPermission() }
+                            )
+                        }
+                        // Check the signed release feed every time the activity launches.
+                        // The updater's prompt is not blocked behind the local chat PIN.
+                        FamilyUpdatePrompt()
+                    }
+                }
+            }
         }
     }
 }
@@ -216,6 +252,7 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
     var tab by remember { mutableIntStateOf(0) }
     var recordingsLibrary by remember { mutableStateOf(false) }
     var chatMenuExpanded by remember { mutableStateOf(false) }
+    var showNetworkSetup by remember { mutableStateOf(false) }
     var chatMenuAction by remember { mutableStateOf<String?>(null) }
     var showContactDetails by remember { mutableStateOf(false) }
     var showChatSecurityConfig by remember { mutableStateOf(false) }
@@ -264,7 +301,7 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
         }
     }
     Column(Modifier.fillMaxSize().background(bg).navigationBarsPadding()) {
-        Surface(color = surface, shadowElevation = 1.dp) {
+        Surface(color = surface, shadowElevation = 2.dp) {
             Row(Modifier.fillMaxWidth().statusBarsPadding()
                 .padding(horizontal = 8.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (selectedPeer != null && active == null && tab == 0) {
@@ -305,7 +342,10 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
                             DropdownMenuItem(text = { Text("Shared media") }, onClick = {
                                 chatMenuExpanded = false; chatMenuAction = "media"
                             })
-                            DropdownMenuItem(text = { Text("Lock this conversation") }, onClick = {
+                            DropdownMenuItem(text = { Text(
+                                if (runCatching { ChatSecurity.enabled(context, selectedPeer.id) }
+                                    .getOrDefault(false)) "Unlock / remove chat lock"
+                                else "Lock this conversation") }, onClick = {
                                 chatMenuExpanded = false; showChatSecurityConfig = true
                             })
                         }
@@ -315,14 +355,41 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
                     Spacer(Modifier.width(11.dp))
                     Column(Modifier.weight(1f)) {
                         Text("Family Touch", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = ink)
-                        Text(networkStatus.label, fontSize = 12.sp, color = if (networkStatus.connected) accent else muted,
+                        Text("Build " + BuildConfig.VERSION_CODE + "  ·  " + networkStatus.label,
+                            fontSize = 11.sp, color = if (networkStatus.connected) connectionGreen else muted,
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
-                    if (networkStatus.connected) Icon(Icons.Outlined.Wifi, "Private network connected", tint = accent)
+                    if (networkStatus.connected) Surface(
+                        shape = RoundedCornerShape(20.dp), color = Color(0xFF173E39)) {
+                        Icon(Icons.Outlined.Wifi, "Private network connected", tint = connectionGreen,
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp).size(18.dp))
+                    }
                 }
             }
         }
-        HorizontalDivider(color = Color(0xFFE5ECE7), thickness = 0.5.dp)
+        HorizontalDivider(color = hairline, thickness = 0.5.dp)
+        if (!networkStatus.connected && !FamilyStore.needsNicknamePrompt &&
+            active == null && groupCall == null && incoming == null) {
+            Surface(color = controlColor, shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, hairline),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.Wifi, "Private network offline",
+                        modifier = Modifier.size(20.dp), tint = accent)
+                    Spacer(Modifier.width(9.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Private network offline", fontSize = 13.sp, color = ink,
+                            fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        Text(networkStatus.label, fontSize = 11.sp, color = muted,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    TextButton(onClick = { showNetworkSetup = true }) {
+                        Text("Connect", color = accent, fontSize = 13.sp)
+                    }
+                }
+            }
+        }
         if (recordingsLibrary) {
             RecordingLibraryScreen { recordingsLibrary = false }
         } else if (groupCall != null) {
@@ -365,7 +432,7 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
                         }, label = { Text(label, fontSize = 11.sp) },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = accent, selectedTextColor = accent,
-                            indicatorColor = Color(0xFFDEF3E8),
+                            indicatorColor = selectedColor,
                             unselectedIconColor = muted, unselectedTextColor = muted))
                 }
             }
@@ -403,12 +470,16 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
         }) { Text("Join") } }, dismissButton = {
             TextButton(onClick = { GroupCallController.hangup() }) { Text("Decline") }
         })
-    if (!FamilyStore.needsNicknamePrompt && !networkStatus.connected && incoming == null && active == null && groupCall == null) {
-        AlertDialog(onDismissRequest = {}, title = { Text("Turn on your private connection") },
+    if (showNetworkSetup && !FamilyStore.needsNicknamePrompt && !networkStatus.connected &&
+        incoming == null && active == null && groupCall == null) {
+        AlertDialog(onDismissRequest = { showNetworkSetup = false },
+            title = { Text("Turn on your private connection") },
             text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("Allow the built-in VPN for private family calls and messages. Registered devices appear after connecting.")
                 VpnSettings()
-            } }, confirmButton = {})
+            } }, confirmButton = {
+                TextButton(onClick = { showNetworkSetup = false }) { Text("Close") }
+            })
     }
     if (FamilyStore.needsNicknamePrompt && incoming == null && active == null) {
         var nickname by rememberSaveable { mutableStateOf(FamilyStore.nickname.take(36)) }
@@ -477,6 +548,12 @@ private fun ChatsPage(peers: List<Peer>, onOpen: (String) -> Unit) {
     Box(Modifier.fillMaxSize()) {
         PullToRefreshBox(isRefreshing = refreshing, onRefresh = { refresh() }, modifier = Modifier.fillMaxSize()) {
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 86.dp, top = 8.dp)) {
+            if (peers.isNotEmpty() || GroupStore.groups.isNotEmpty()) item {
+                Column(Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp, top = 12.dp, bottom = 11.dp)) {
+                    Text("Conversations", color = ink, fontSize = 21.sp, fontWeight = FontWeight.Bold)
+                    Text("Your private family chats", color = muted, fontSize = 12.sp)
+                }
+            }
             if (peers.isEmpty() && GroupStore.groups.isEmpty()) item {
                 Column(Modifier.fillMaxWidth().padding(top = 85.dp, start = 30.dp, end = 30.dp),
                     horizontalAlignment = Alignment.CenterHorizontally) {
@@ -491,7 +568,7 @@ private fun ChatsPage(peers: List<Peer>, onOpen: (String) -> Unit) {
             }
             items(peers, key = { it.id }) { peer ->
                 val message = FamilyStore.messages.lastOrNull { it.peerId == peer.id }
-                PeerRow(peer, message?.text ?: "Start a conversation",
+                PeerRow(peer, message?.text?.let { ChatPreviewFormatter.forContact(it) } ?: "Start a conversation",
                     onClick = { onOpen(peer.id) }, unread = FamilyStore.unreadFor(peer.id))
             }
         }
@@ -558,7 +635,7 @@ private fun CallsPage(peers: List<Peer>, onCall: (Peer, Boolean) -> Unit) {
                     Icon(Icons.Outlined.Call, "Call again")
                 }
             }
-            HorizontalDivider(color = Color(0xFFE5ECE7), thickness = 0.5.dp)
+            HorizontalDivider(color = hairline, thickness = 0.5.dp)
         }
     }
 }
@@ -576,6 +653,9 @@ private fun ContactsPage(peers: List<Peer>, onOpen: (String) -> Unit, onConnecti
     val connected = EmbeddedTailnet.status.connected
     var refreshing by remember { mutableStateOf(false) }
     var quickPeer by remember { mutableStateOf<Peer?>(null) }
+    var exportPeer by remember { mutableStateOf<Peer?>(null) }
+    var deletePeer by remember { mutableStateOf<Peer?>(null) }
+    var securityPeer by remember { mutableStateOf<Peer?>(null) }
     var confirmHelp by remember { mutableStateOf<Peer?>(null) }
     var pingResult by remember { mutableStateOf("") }
     quickPeer?.let { selected ->
@@ -598,6 +678,16 @@ private fun ContactsPage(peers: List<Peer>, onOpen: (String) -> Unit, onConnecti
                         } catch (_: Exception) { pingResult = selected.name + " is unreachable" }
                     }
                 }) { Text("Ping this family device") }
+                TextButton(onClick = { quickPeer = null; securityPeer = selected }) {
+                    Text(if (runCatching { ChatSecurity.enabled(context, selected.id) }
+                        .getOrDefault(false)) "Unlock / remove chat lock" else "Lock this conversation")
+                }
+                TextButton(onClick = { quickPeer = null; exportPeer = selected }) {
+                    Text("Export conversation")
+                }
+                TextButton(onClick = { quickPeer = null; deletePeer = selected }) {
+                    Text("Delete local chat history", color = MaterialTheme.colorScheme.error)
+                }
                 TextButton(onClick = { quickPeer = null; confirmHelp = selected }) {
                     Text("SOS — ask for help")
                 }
@@ -613,6 +703,39 @@ private fun ContactsPage(peers: List<Peer>, onOpen: (String) -> Unit, onConnecti
                 Spacer(Modifier.height(12.dp))
             }
         }
+    }
+    securityPeer?.let { chosen ->
+        ChatSecuritySettingsDialog(chosen.id) { securityPeer = null }
+    }
+    exportPeer?.let { chosen ->
+        val count = FamilyStore.messages.count { it.peerId == chosen.id }
+        AlertDialog(onDismissRequest = { exportPeer = null },
+            title = { Text("Export chat with " + chosen.name + "?") },
+            text = { Text("Share up to the last 200 local text messages using Android's share sheet. This may expose private conversations to the app you choose. No credentials or raw location IDs are exported. Messages are not sent until you choose a destination.") },
+            confirmButton = { Button(onClick = {
+                try {
+                    val text = ChatExport.plainText(chosen, FamilyStore.messages, FamilyStore.nickname)
+                    val intent = Intent(Intent.ACTION_SEND).setType("text/plain")
+                        .putExtra(Intent.EXTRA_TEXT, text)
+                    context.startActivity(Intent.createChooser(intent, "Export family chat"))
+                    pingResult = "Prepared " + count.coerceAtMost(200) + " local messages"
+                } catch (ex: Exception) { pingResult = "Export unavailable: " + (ex.message ?: "") }
+                exportPeer = null
+            }) { Text("Open share sheet") } },
+            dismissButton = { TextButton(onClick = { exportPeer = null }) { Text("Cancel") } })
+    }
+    deletePeer?.let { chosen ->
+        AlertDialog(onDismissRequest = { deletePeer = null },
+            title = { Text("Delete local chat history?") },
+            text = { Text("Delete messages with " + chosen.name + " on this device only? This cannot be undone. It does not delete another family member's messages or revoke pairing.") },
+            confirmButton = { Button(onClick = {
+                val removed = FamilyStore.clearConversation(chosen.id)
+                pingResult = "Deleted " + removed + " local messages with " + chosen.name
+                deletePeer = null
+            }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) {
+                Text("Delete on this device")
+            } },
+            dismissButton = { TextButton(onClick = { deletePeer = null }) { Text("Cancel") } })
     }
     confirmHelp?.let { chosen ->
         AlertDialog(onDismissRequest = { confirmHelp = null },
@@ -651,6 +774,8 @@ private fun ContactsPage(peers: List<Peer>, onOpen: (String) -> Unit, onConnecti
             verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Registered family devices", fontWeight = FontWeight.Bold)
+                Text("Hold a contact for options, including ping, export, and chat lock.",
+                    fontSize = 11.sp, color = muted)
                 val statusText = if (connected) FamilyStore.directoryStatus else
                     "Private network disconnected - connect before discovery"
                 val warning = statusText.contains("unavailable", true) ||
@@ -706,8 +831,10 @@ private fun ContactsPage(peers: List<Peer>, onOpen: (String) -> Unit, onConnecti
 @Composable
 private fun PeerRow(peer: Peer, subtitle: String, onClick: () -> Unit, unread: Int = 0,
                     onLongPress: (() -> Unit)? = null) {
-    Row(Modifier.fillMaxWidth().combinedClickable(onClick = onClick,
-        onLongClick = { onLongPress?.invoke() }).padding(horizontal = 19.dp, vertical = 15.dp),
+    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
+        .clip(RoundedCornerShape(16.dp)).background(cardSurface)
+        .combinedClickable(onClick = onClick, onLongClick = { onLongPress?.invoke() })
+        .padding(horizontal = 14.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Avatar(peer.name, FamilyStore.peerPhotos[peer.id]); Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
@@ -715,10 +842,10 @@ private fun PeerRow(peer: Peer, subtitle: String, onClick: () -> Unit, unread: I
             Row(verticalAlignment = Alignment.CenterVertically) {
                 val state = FamilyStore.peerPresence[peer.id]
                 val presenceColor = when (state) {
-                    "available" -> Color(0xFF12835A)
-                    "on_call" -> Color(0xFF287CC7)
-                    "away" -> Color(0xFFD39A27)
-                    else -> Color(0xFF98A4A0)
+                    "available" -> connectionGreen
+                    "on_call" -> Color(0xFF62BFA6)
+                    "away" -> Color(0xFFFFCD75)
+                    else -> Color(0xFF8998B8)
                 }
                 Box(Modifier.size(8.dp).background(presenceColor, CircleShape))
                 Spacer(Modifier.width(6.dp))
@@ -732,7 +859,7 @@ private fun PeerRow(peer: Peer, subtitle: String, onClick: () -> Unit, unread: I
             }
         }
     }
-    HorizontalDivider(color = Color(0xFFE5ECE7), thickness = 0.5.dp)
+    HorizontalDivider(color = hairline, thickness = 0.5.dp)
 }
 
 @Composable
@@ -745,12 +872,12 @@ internal fun Avatar(name: String, photo: String? = null, avatarSize: androidx.co
             }
         } catch (_: Exception) { null }
     }
-    Box(Modifier.size(avatarSize).clip(CircleShape).background(Color(0xFF536A63)),
+    Box(Modifier.size(avatarSize).clip(CircleShape).background(Color(0xFF245147)),
         contentAlignment = Alignment.Center) {
         if (decoded != null) Image(decoded, "Profile image", Modifier.fillMaxSize(),
             contentScale = ContentScale.Fit)
         else Text(name.take(1).uppercase(), fontWeight = FontWeight.Bold,
-            fontSize = 21.sp, color = Color(0xFF086940))
+            fontSize = 21.sp, color = ink)
     }
 }
 
@@ -800,7 +927,7 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
                 verticalArrangement = Arrangement.spacedBy(9.dp)) {
                 Text((AttachmentTransport.parse(item.text)?.name ?: item.text).take(130),
                     maxLines = 2, overflow = TextOverflow.Ellipsis, color = ink, fontSize = 14.sp)
-                Row(Modifier.fillMaxWidth().background(Color(0xFF2A3942), RoundedCornerShape(30.dp)),
+                Row(Modifier.fillMaxWidth().background(controlColor, RoundedCornerShape(30.dp)),
                     horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
                     ReactionPolicy.choices.forEach { emoji ->
                         Box(Modifier.size(45.dp).clickable {
@@ -870,7 +997,8 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
             }) { Text("Delete") } },
             dismissButton = { TextButton(onClick = { deleteChoice = null }) { Text("Cancel") } })
     }
-    var locationPreview by remember { mutableStateOf<String?>(null) }
+    var mapCenter by remember(peer.id) { mutableStateOf<Pair<Double,Double>?>(null) }
+    var showMapPicker by remember(peer.id) { mutableStateOf(false) }
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
     LaunchedEffect(peer.id) {
@@ -983,10 +1111,9 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
         locationJob = scope.launch {
             try {
                 val loc = LocationShareController.request(context)
-                locationPreview = "https://www.google.com/maps?q=" +
-                    String.format(Locale.US, "%.6f,%.6f", loc.latitude, loc.longitude)
-                locationDetails = "Accuracy about ${loc.accuracy.toInt()} m · " +
-                    DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(loc.time))
+                mapCenter = loc.latitude to loc.longitude
+                showMapPicker = true
+                locationDetails = "Location accuracy about " + loc.accuracy.toInt() + " m"
             } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
                 FamilyStore.lastError = "No fresh location within 30 seconds. Check Location settings and try again."
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
@@ -1021,7 +1148,7 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
             AttachmentChoice("Documents and files", Icons.Outlined.InsertDriveFile) {
                 selectMedia.launch(arrayOf("*/*"))
             }
-            AttachmentChoice("Location (one-time)", Icons.Outlined.LocationOn) {
+            AttachmentChoice("Location: map pin or live", Icons.Outlined.LocationOn) {
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
                     PackageManager.PERMISSION_GRANTED ||
                     ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
@@ -1033,18 +1160,26 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
             Spacer(Modifier.height(20.dp))
         }
     }
-    if (locationPreview != null) {
-        AlertDialog(onDismissRequest = { locationPreview = null },
-            title = { Text("Share your location?") },
-            text = { Text("Send this one-time map location to " + peer.name +
-                "? $locationDetails. It will remain in chat history. This does not enable live tracking.") },
-            confirmButton = {
-                Button(onClick = {
-                    locationPreview?.let { url -> sendChat("Location: " + url) }
-                    locationPreview = null
-                }) { Text("Send location") }
-            }, dismissButton = {
-                TextButton(onClick = { locationPreview = null }) { Text("Cancel") }
+    val chosenCenter = mapCenter
+    if (showMapPicker && chosenCenter != null) {
+        LocationPinPicker(chosenCenter.first, chosenCenter.second, peer.name,
+            direct = group == null,
+            onDismiss = { showMapPicker = false; mapCenter = null },
+            onSendPin = { lat, lon ->
+                val map = String.format(Locale.US,
+                    "https://www.google.com/maps?q=%.6f,%.6f", lat,lon)
+                if (sendChat("Location: " + map)) {
+                    showMapPicker = false; mapCenter = null
+                }
+            },
+            onStartLive = { duration ->
+                try {
+                    LiveLocationSharing.begin(context, peer, duration)
+                    showMapPicker = false
+                    mapCenter = null
+                } catch (ex: Exception) {
+                    FamilyStore.lastError = "Live location failed: " + (ex.message ?: "Unavailable")
+                }
             })
     }
     Column(Modifier.fillMaxSize().background(bg)) {
@@ -1084,7 +1219,7 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
                     val textColor = ink
                     val secondaryColor = muted
                     val actionColor = accent
-                    val bubbleColor = if (msg.outgoing) Color(0xFF005C4B) else surface
+                    val bubbleColor = if (msg.outgoing) sentBubble else surface
                     if (!msg.outgoing) DarkChatTail(false, bubbleColor)
                     Column(Modifier.widthIn(max = 310.dp)
                         .pointerInput(msg.id) { detectTapGestures(onLongPress = { actionMessage = msg }) }
@@ -1123,7 +1258,7 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
                                     })
                                 } else if (attachment.mime.startsWith("video/")) {
                                     Box(Modifier.size(width = 210.dp, height = 110.dp)
-                                        .background(Color(0xFF2A3942), RoundedCornerShape(8.dp))
+                                        .background(controlColor, RoundedCornerShape(8.dp))
                                         .clickable { viewedMedia = attachment },
                                         contentAlignment = Alignment.Center) {
                                         Icon(Icons.Outlined.Videocam, "Play video", tint = accent)
@@ -1150,6 +1285,9 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
                         } else if (msg.deletedForEveryone) {
                             Text("This message was deleted", color = muted, fontSize = 14.sp,
                                 fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
+                        } else if (LiveLocationProtocol.parse(msg.text) != null) {
+                            LiveLocationBubble(requireNotNull(LiveLocationProtocol.parse(msg.text)),
+                                msg.outgoing) { LiveLocationSharing.stop(context) }
                         } else if (msg.text.startsWith("Location: https://www.google.com/maps?q=")) {
                             ChatLocationPreview(msg.text.removePrefix("Location: ")) {
                                 try {
@@ -1197,11 +1335,24 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
             }
             TextButton(onClick = { replyTo = null }) { Text("✕", color = muted) }
         } }
+        LiveLocationSharing.active?.let { share ->
+            if (share.peerId == peer.id) {
+                Row(Modifier.fillMaxWidth().background(Color(0xFF26423C))
+                    .padding(horizontal = 12.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Text("Live location is active", Modifier.weight(1f),
+                        color = Color(0xFF8FFFD5), fontSize = 12.sp)
+                    TextButton(onClick = { LiveLocationSharing.stop(context) }) {
+                        Text("Stop now", color = Color(0xFFFFB8B8))
+                    }
+                }
+            }
+        }
         if (voiceNote) {
             InlineVoiceComposer(onDismiss = { voiceNote = false }, onSend = sendVoiceNote)
         } else Row(Modifier.fillMaxWidth().background(bg).padding(horizontal = 6.dp, vertical = 6.dp),
             verticalAlignment = Alignment.Bottom) {
-            Row(Modifier.weight(1f).background(Color(0xFF2A3942), RoundedCornerShape(27.dp))
+            Row(Modifier.weight(1f).background(controlColor, RoundedCornerShape(27.dp))
                 .heightIn(min = 50.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box {
                     IconButton(modifier = Modifier.size(40.dp), onClick = { emojiPickerOpen = true }) {
@@ -1343,25 +1494,42 @@ private fun SettingsPage(networkStatus: VpnConnectionStatus, onRecordings: () ->
 @Composable
 private fun CallControls(onHangup: () -> Unit, modifier: Modifier = Modifier) {
     val speaker = CallController.speakerEnabled
-    val muted = CallController.microphoneMuted
-    Column(modifier) {
-    RecordingControls(FamilyStore.activeCall?.isVideo == true)
-    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        OutlinedButton(onClick = { CallController.selectSpeakerRoute(!speaker) }, modifier = Modifier.weight(1f),
-            contentPadding = PaddingValues(horizontal = 4.dp)) {
-            Text(if (speaker) "Speaker on" else "Earpiece", fontSize = 11.sp, maxLines = 1)
+    val isMuted = CallController.microphoneMuted
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        RecordingControls(FamilyStore.activeCall?.isVideo == true)
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                FilledIconButton(onClick = { CallController.selectSpeakerRoute(!speaker) },
+                    modifier = Modifier.size(56.dp),
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = controlColor, contentColor = ink)) {
+                    Icon(Icons.Outlined.VolumeUp,
+                        if (speaker) "Disable speaker" else "Enable speaker")
+                }
+                Text(if (speaker) "Speaker on" else "Speaker", fontSize = 11.sp, color = muted)
+            }
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                FilledIconButton(onClick = { CallController.toggleMicrophoneMute(!isMuted) },
+                    modifier = Modifier.size(56.dp),
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = controlColor, contentColor = ink)) {
+                    Icon(if (isMuted) Icons.Outlined.Mic else Icons.Outlined.MicOff,
+                        if (isMuted) "Unmute microphone" else "Mute microphone")
+                }
+                Text(if (isMuted) "Unmute" else "Mute", fontSize = 11.sp, color = muted)
+            }
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                FilledIconButton(onClick = onHangup, modifier = Modifier.size(60.dp),
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = Color(0xFFF05263), contentColor = Color.White)) {
+                    Icon(Icons.Outlined.CallEnd, "End call")
+                }
+                Text("End call", fontSize = 11.sp, color = ink)
+            }
         }
-        OutlinedButton(onClick = { CallController.toggleMicrophoneMute(!muted) }, modifier = Modifier.weight(1f),
-            contentPadding = PaddingValues(horizontal = 4.dp)) {
-            Text(if (muted) "Unmute" else "Mute mic", fontSize = 11.sp, maxLines = 1)
-        }
-        Button(onClick = onHangup, modifier = Modifier.weight(1f),
-            contentPadding = PaddingValues(horizontal = 4.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE95058), contentColor = Color.White)) {
-            Text("End call", fontSize = 11.sp, maxLines = 1)
-        }
-    }
     }
 }
 
@@ -1401,15 +1569,20 @@ private fun CallPage(call: CallInvite, onHangup: () -> Unit) {
             CallControls(onHangup, Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp))
         }
     } else {
-        Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally,
+        Column(Modifier.fillMaxSize().background(Brush.verticalGradient(
+                listOf(Color(0xFF0B141A), Color(0xFF1D3432), Color(0xFF0B141A)))),
+            horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center) {
-            Avatar(name)
-            Spacer(Modifier.height(20.dp))
-            Text(name, fontWeight = FontWeight.Bold, fontSize = 27.sp)
+            Box(Modifier.size(126.dp).background(Color(0xFF245147), CircleShape),
+                contentAlignment = Alignment.Center) {
+                Avatar(name, FamilyStore.peerPhotos[call.peerId], 104.dp)
+            }
+            Spacer(Modifier.height(22.dp))
+            Text(name, fontWeight = FontWeight.Bold, fontSize = 27.sp, color = ink)
             Text("Private voice call", color = muted, fontSize = 13.sp)
             Spacer(Modifier.height(8.dp))
-            Text(timer, fontSize = 20.sp, fontWeight = FontWeight.Medium)
-            Spacer(Modifier.height(55.dp))
+            Text(timer, fontSize = 20.sp, fontWeight = FontWeight.Medium, color = ink)
+            Spacer(Modifier.height(65.dp))
             CallControls(onHangup)
         }
     }
