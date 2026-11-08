@@ -54,7 +54,6 @@ import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Contacts
-import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Send
@@ -195,7 +194,6 @@ class MainActivity : ComponentActivity() {
             isAppearanceLightStatusBars = false
             isAppearanceLightNavigationBars = false
         }
-        FamilyAppearance.init(this)
         FamilyStore.init(this)
         GroupStore.init(this)
         intent.getStringExtra("open_peer_id")?.let { id ->
@@ -214,18 +212,11 @@ class MainActivity : ComponentActivity() {
         if (!FamilyStore.needsNicknamePrompt) requestNotificationPermission()
         setContent {
             val palette = FamilyAppearance.tone
-            val scheme = if (FamilyAppearance.dark) darkColorScheme(
+            val scheme = darkColorScheme(
                 primary = palette.accent, onPrimary = palette.accentForeground,
                 background = palette.background, surface = palette.surface,
                 onBackground = palette.text, onSurface = palette.text,
                 secondary = palette.accent, secondaryContainer = palette.selected,
-                onSecondaryContainer = palette.text, surfaceContainer = palette.surface,
-                surfaceVariant = palette.control
-            ) else lightColorScheme(
-                primary = palette.accent, onPrimary = palette.accentForeground,
-                background = palette.background, surface = palette.surface,
-                onBackground = palette.text, onSurface = palette.text,
-                secondary = palette.accent, secondaryContainer = palette.sentBubble,
                 onSecondaryContainer = palette.text, surfaceContainer = palette.surface,
                 surfaceVariant = palette.control
             )
@@ -233,15 +224,25 @@ class MainActivity : ComponentActivity() {
                 window.statusBarColor = palette.surface.toArgb()
                 window.navigationBarColor = palette.background.toArgb()
                 androidx.core.view.WindowInsetsControllerCompat(window, window.decorView).apply {
-                    isAppearanceLightStatusBars = !FamilyAppearance.dark
-                    isAppearanceLightNavigationBars = !FamilyAppearance.dark
+                    isAppearanceLightStatusBars = false
+                    isAppearanceLightNavigationBars = false
                 }
             }
-            MaterialTheme(colorScheme = scheme) { Surface(modifier = Modifier.fillMaxSize(), color = bg, contentColor = ink) { Box { FamilyPinGate {
-                FamilyTouchUI(requestCallPermissions = { video, callback -> withCallPermissions(video, callback) },
-                    onNicknameFinished = { requestNotificationPermission() })
-                FamilyUpdatePrompt()
-            } } } }
+            MaterialTheme(colorScheme = scheme) {
+                Surface(modifier = Modifier.fillMaxSize(), color = bg, contentColor = ink) {
+                    Box {
+                        FamilyPinGate {
+                            FamilyTouchUI(
+                                requestCallPermissions = { video, callback -> withCallPermissions(video, callback) },
+                                onNicknameFinished = { requestNotificationPermission() }
+                            )
+                        }
+                        // Check the signed release feed every time the activity launches.
+                        // The updater's prompt is not blocked behind the local chat PIN.
+                        FamilyUpdatePrompt()
+                    }
+                }
+            }
         }
     }
 }
@@ -411,10 +412,7 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
                         requestCallPermissions(video) { CallController.start(peer, video) }
                     }
                     2 -> ContactsPage(contacts, onOpen = { FamilyStore.selectedPeer = it; tab = 0 },
-                        onConnectionSettings = { tab = 4 })
-                    3 -> FamilyGlobePage(contacts, onOpen = {
-                        FamilyStore.selectedPeer = it; tab = 0
-                    })
+                        onConnectionSettings = { tab = 3 })
                     else -> SettingsPage(networkStatus, onRecordings = { recordingsLibrary = true })
                 }
             }
@@ -422,8 +420,7 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
                 val navItems = listOf(Triple("Chats", Icons.Outlined.ChatBubbleOutline, 0),
                     Triple("Calls", Icons.Outlined.Call, 1),
                     Triple("Contacts", Icons.Outlined.Contacts, 2),
-                    Triple("Globe", Icons.Outlined.Public, 3),
-                    Triple("Settings", Icons.Outlined.Settings, 4))
+                    Triple("Settings", Icons.Outlined.Settings, 3))
                 navItems.forEach { (label, icon, idx) ->
                     NavigationBarItem(selected = tab == idx, onClick = { tab = idx; FamilyStore.selectedPeer = null },
                         icon = {
@@ -849,7 +846,7 @@ private fun PeerRow(peer: Peer, subtitle: String, onClick: () -> Unit, unread: I
                 val state = FamilyStore.peerPresence[peer.id]
                 val presenceColor = when (state) {
                     "available" -> connectionGreen
-                    "on_call" -> Color(0xFF80B5FF)
+                    "on_call" -> Color(0xFF62BFA6)
                     "away" -> Color(0xFFFFCD75)
                     else -> Color(0xFF8998B8)
                 }
@@ -878,7 +875,7 @@ internal fun Avatar(name: String, photo: String? = null, avatarSize: androidx.co
             }
         } catch (_: Exception) { null }
     }
-    Box(Modifier.size(avatarSize).clip(CircleShape).background(Color(0xFF3C3375)),
+    Box(Modifier.size(avatarSize).clip(CircleShape).background(Color(0xFF245147)),
         contentAlignment = Alignment.Center) {
         if (decoded != null) Image(decoded, "Profile image", Modifier.fillMaxSize(),
             contentScale = ContentScale.Fit)
@@ -1471,7 +1468,6 @@ private fun SettingsPage(networkStatus: VpnConnectionStatus, onRecordings: () ->
             color = muted, fontSize = 12.sp)
         HorizontalDivider(color = Color(0xFF24415C))
         VpnSettings()
-        FamilyAppearanceSettings()
         FamilyPinSettings()
         OutlinedButton(onClick = {
             try {
@@ -1577,10 +1573,10 @@ private fun CallPage(call: CallInvite, onHangup: () -> Unit) {
         }
     } else {
         Column(Modifier.fillMaxSize().background(Brush.verticalGradient(
-                listOf(Color(0xFF0B1223), Color(0xFF1D2B50), Color(0xFF10182D)))),
+                listOf(Color(0xFF0B141A), Color(0xFF1D3432), Color(0xFF0B141A)))),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center) {
-            Box(Modifier.size(126.dp).background(Color(0xFF3C327B), CircleShape),
+            Box(Modifier.size(126.dp).background(Color(0xFF245147), CircleShape),
                 contentAlignment = Alignment.Center) {
                 Avatar(name, FamilyStore.peerPhotos[call.peerId], 104.dp)
             }
