@@ -53,4 +53,16 @@ Use the separate `win.fantest.familytouch.qa` Build48 APK on S25. Verify:
 - production Embedded version and data unchanged
 - long-duration cross-device messaging/calling remain outside this build's sign-off
 
-**Production status: HOLD pending signer and physical acceptance.**
+## S25 physical deployment and updater regression (2026-11-11)
+
+- S25 (SM-S938B) remote agent and ADB reconnected. The S25 already held the exact original Build47 QA APK (SHA-256 `98f81beb63dabcb94aa32b86c66045ce8090f0fd703cd39c20a07e89171277c9`).
+- Reconstructed Build48 QA on the S25 from verified original using a checksum-selected normalization overlay (~4.8 MB) and Zstandard source delta (~328 KB). Final local S25 APK SHA-256 matched the MASTER-PC artifact: `5eccab566fd3350b914d3064339d0e65c7e42f935716a254ee33674859c720ee`, 98,988,128 bytes.
+- S25 local ADB installation: `Success` (`adb install -r -t`) for separate package `win.fantest.familytouch.qa`.
+- Postinstall `dumpsys package`: QA versionCode **48**, versionName `0.3.31-classic-green-updater-ime-qa`.
+- Cold launch `Status: ok`; 483 ms initial, 418 ms after instrumentation. Foreground QA MainActivity and running process confirmed. No recent AndroidRuntime fatal exception found.
+- The original Embedded package remains versionCode **47**, `0.3.30-classic-green-updater-embedded`, with unchanged lastUpdateTime (`2026-11-08 02:38:52`); neither its application data nor install state was reset.
+- Installed current `app-qa-androidTest.apk` (SHA-256 `630efbf9992cda9bb252575b899f8cf5f9ca2c876d8e4c43c0d58cd53e34118e`), then ran `win.fantest.familytouch.UpdaterPauseDeviceTest` on S25. **OK (1 test)**; verifies pause persistence, 32-byte fixture retention, single-job cancel and cleanup in isolated QA app.
+- Code audit confirms absence of the Globe source, theme picker and alternate appearance settings. Direct visual acceptance and chat-composer-on-Samsung-Keyboard testing remain **unverified** because QA has no conversation setup. A real signed newer update feed and actual long-running pause/resume download were not exercised.
+- Source checkpoint: GitHub draft PR #18 (`integration/family-touch-classic-green-ime-updater-20261111`) against the Build47 reliability feature branch. No merge or production updater publication performed.
+
+**Production status: HOLD pending matching release signer, visual acceptance, keyboard test, and real updater lifecycle acceptance.**
