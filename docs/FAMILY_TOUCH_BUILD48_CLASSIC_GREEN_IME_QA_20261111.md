@@ -67,4 +67,34 @@ Use the separate `win.fantest.familytouch.qa` Build48 APK on S25. Verify:
 
 - QA screenshot initially displayed an Android App Compatibility warning. Direct ELF segment audit of QA48 and signed Embedded47: `libgojni.so` PT_LOAD `p_align=0x1000` (4 KB, **not 16 KB compatible**); `libandroidx.graphics.path.so` and `libjingle_peerconnection_so.so` show `0x4000` (16 KB, aligned). Both builds contain the same pre-existing native dependency issue. S25 reports `getconf PAGESIZE=4096`, so **this warning does not demonstrate a runtime failure on the current device**. Tracked separately in [GitHub issue #19](https://github.com/mrfantest2/family-touch/issues/19). Do not conceal the warning or mark 16 KB compatibility passed.
 
-**Production status: HOLD pending matching release signer, Samsung Keyboard test, real updater lifecycle acceptance, and native 16 KB page-size remediation.**
+## S25 group-management, Contacts and Settings acceptance checkpoint (2026-11-12 local)
+
+User requests incorporated into the **existing** `win.fantest.familytouch` project on draft PR #18, without a new production package or changed visual theme.
+
+### Source changes
+- Group creator: explicit destructive **Delete group** confirmation; remove active group locally, record higher-revision owner-only tombstone, queue authenticated membership update to former members, stop active group call and remove queued group messages. Clears local chat on confirmed delete; other devices can retain historical copies.
+- Group member: confirmed **Leave group** action with optional checkbox to delete **local** messages only after successfully contacting the owner and completing the leave. A disconnected owner causes an error; membership is not silently modified.
+- Deleted/removed group safeguards: incoming messages, membership changes, stale outgoing queue items, and send authorization are restricted to the active-group list, not tombstones.
+- Contacts: standalone refresh button removed, existing Compose `PullToRefreshBox` retained with connection/error semantics.
+- Settings: existing classic-dark-green controls reorganized into **Your profile**, **Private connection**, **Privacy & security**, **Chats & recordings**, and **App & updates** sections. No new themes/globe, no security or identity reset.
+- Added isolated Android instrumentation `GroupDeleteDeviceTest` and `ImeFixtureDeviceTest`. The latter creates disposable test data only inside QA; cleanup excludes all non-fixture contact/message/call records.
+
+### Verified evidence
+- MASTER-PC Gradle: `:app:testDebugUnitTest :app:testQaUnitTest :app:assembleQa :app:assembleQaAndroidTest :app:lintQa` **BUILD SUCCESSFUL** (post-safeguard) in 2m16s; **152 JUnit tests, zero failures**.
+- QA APK: `win.fantest.familytouch.qa`, versionCode **48**, `0.3.31-classic-green-updater-ime-qa`; **100,866,718 bytes**, SHA-256 `5ad51c813d102d43ab06f19f5d5745cd3463358b244ebd9291a9fc570b2328cd`, debug/QA signing certificate SHA-256 `a3c5765d65e8a763a0c165c78e7a9bfad17f389275680fab086b02d3999434ca`.
+- S25 downloaded a small patch through a **temporary restricted HTTPS tunnel**, validated patch/test hashes, reconstructed full QA APK locally, matched exact expected APK SHA-256 and byte count, and installed in-place over the **QA** package with Android `Success`. Production never targeted.
+- S25 `GroupDeleteDeviceTest` **OK (1 test)** after final source safeguards: owner-only group deletion, tombstone revision/persistence, rejection of stale incoming and outgoing messages, fixture cleanup; no real family group targeted.
+- S25 `ImeFixtureDeviceTest#removeIsolatedConversation` **OK (1 test)**. Verified **zero** persistent test-contact ID references remain, including synthetic call history. No messages sent by instrumentation tests.
+- S25 hierarchy displayed four tabs Chats / Calls / Contacts / Settings. Settings card labels matched the requested five sections. Contacts hierarchy showed **no standalone Refresh button**; pull-down gesture executed and UI remained responsive. Directory network request itself is not accepted: QA reports **family-registration conflict** when coexisting with production.
+- The original S25 foreground app (`com.brave.browser`) was unchanged after device tests. No device screenshots, chats, secrets, or pairing keys were added to GitHub.
+- S25 production `win.fantest.familytouch.embedded` remains versionCode **47**, `0.3.30-classic-green-updater-embedded`, unchanged `lastUpdateTime=2026-11-08 02:38:52`.
+- Release-signing metadata audit: GitHub Actions has four secret *names*, but the existing workflow only consumes signing secrets on `main`. The secret certificate **has not been checked against** original Embedded signer `8b028e6a167011f2d070c333000e23cda90dbc6d6948cc71d83894da4a33ee87`. No new release key generated.
+- 16 KB remains **BLOCKED**: prebuilt upstream pinned `app/libs/libtailscale.aar` contains `libgojni.so` with `p_align=0x1000` on ARM64. APK ZIP alignment passes; 16 KB runtime/emulator/VPN tests have **not** passed. See issue #19.
+
+### Explicitly unverified / hold
+- The end-to-end Samsung Keyboard composer test (multiline input, scroll, relaunch, keyboard insets) remains **PARTIAL**, not accepted solely from `imePadding()` or the synthetic fixture. Prior user video demonstrated keyboard-composer obscuration on the original Embedded build.
+- Real QA-signed higher-version APK download, pause/resume from notification, WorkManager restart, signature rejection, and installer confirmation remain **UNVERIFIED**; small fixture-based updater unit/instrumentation passed earlier, not a substitute.
+- Real multi-device group leave/delete propagation and cleanup are **UNVERIFIED**; only the isolated on-device group-owner deletion logic passed.
+- Original production signing material compatibility **UNVERIFIED**. **Never** use the QA/debug certificate over Embedded Build47, uninstall it, clear data, publish the updater feed, or merge draft PR #18 without final approval.
+
+**Production status: HOLD pending original matching release signer, full Samsung Keyboard and real updater physical acceptance, real group propagation QA, and 16 KB native compatibility.**
