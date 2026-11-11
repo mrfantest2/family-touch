@@ -97,13 +97,16 @@ internal object GroupStore {
         save()
     }
     @Synchronized fun validateSender(sender: String, data: JSONObject): FamilyGroup {
-        val group = requireNotNull(find(data.getString("groupId"))) { "Group invitation not received yet" }
+        val group = requireNotNull(groups.firstOrNull { it.id == data.getString("groupId") }) {
+            "Group invitation not received or group has been removed"
+        }
         require(FamilyStore.deviceId in group.members && group.membership.canSend(sender, data.getLong("revision"))) {
             "Not a current group member"
         }
         return group
     }
     @Synchronized fun changeMembers(group: FamilyGroup, members: Set<String>) {
+        require(groups.any { it.id == group.id && it.revision == group.revision }) { "Group is no longer active" }
         require(group.owner == FamilyStore.deviceId && group.membership.canUpdate(group.owner, group.owner, members, group.revision + 1))
         require(members.all { it == FamilyStore.deviceId || FamilyStore.find(it) != null })
         val next = group.copy(members = members, revision = group.revision + 1)
@@ -112,6 +115,27 @@ internal object GroupStore {
         scheduleUpdate(next, group.members + members); save()
         scope.launch { flush() }
     }
+    /**
+     * The creator dissolves the group with a higher-revision, owner-only membership
+     * snapshot. The existing authenticated group_update protocol removes the group
+     * from former members' lists. A tombstone answers reconnecting old members, so
+     * stale snapshots cannot revive the deleted group. Chat history is not erased.
+     */
+    @Synchronized fun deleteOwned(group: FamilyGroup) {
+        val current = requireNotNull(groups.firstOrNull { it.id == group.id }) {
+            "This group has already been removed"
+        }
+        require(current.owner == FamilyStore.deviceId) { "Only the creator can delete this group" }
+        val removed = current.copy(members = setOf(current.owner), revision = current.revision + 1)
+        if (GroupCallController.session?.groupId == current.id) GroupCallController.hangup()
+        groups.removeAll { it.id == current.id }
+        tombstones[current.id] = removed
+        pending.removeAll { it.optString("groupId") == current.id }
+        scheduleUpdate(removed, current.members)
+        save()
+        scope.launch { flush() }
+    }
+
     suspend fun leave(group: FamilyGroup) {
         require(group.owner != FamilyStore.deviceId) { "The creator manages membership; remove other members instead" }
         val owner = requireNotNull(FamilyStore.find(group.owner))
@@ -120,7 +144,9 @@ internal object GroupStore {
         withContext(Dispatchers.Main) { receiveUpdate(owner.id, latest) }
     }
     fun receiveLeave(sender: String, data: JSONObject) {
-        val group = requireNotNull(find(data.getString("groupId")))
+        val group = requireNotNull(groups.firstOrNull { it.id == data.getString("groupId") }) {
+            "Group is no longer active"
+        }
         require(group.owner == FamilyStore.deviceId && sender in group.members && sender != group.owner)
         changeMembers(group, group.members - sender)
     }
@@ -134,6 +160,7 @@ internal object GroupStore {
         updates.add(group.json().put("remaining", JSONArray((all - FamilyStore.deviceId).toList())))
     }
     @Synchronized fun queue(group: FamilyGroup, text: String, attachment: AttachmentTransport.Info? = null) {
+        require(groups.any { it.id == group.id && it.revision == group.revision }) { "Group is no longer active" }
         require(FamilyStore.deviceId in group.members && pending.size < 500)
         val id = attachment?.id ?: UUID.randomUUID().toString()
         val body = attachment?.let { AttachmentTransport.message(it.id, it.name, it.mime, it.size) } ?: text.trim().take(6000)
@@ -173,13 +200,15 @@ internal object GroupStore {
         }
         val snapshot = synchronized(this) { pending.toList() }
         for (item in snapshot) {
-            var group = find(item.getString("groupId")) ?: continue
+            var group = synchronized(this) { groups.firstOrNull { it.id == item.getString("groupId") } } ?: continue
             if (group.owner != FamilyStore.deviceId) {
                 try {
                     val owner = requireNotNull(FamilyStore.find(group.owner))
                     val latest = Tailnet.send(owner, "group_snapshot", JSONObject().put("groupId", group.id))
                     withContext(Dispatchers.Main) { receiveUpdate(owner.id, latest) }
-                    group = requireNotNull(find(group.id))
+                    group = requireNotNull(synchronized(this@GroupStore) {
+                        groups.firstOrNull { it.id == group.id }
+                    })
                 } catch (e: CancellationException) { throw e }
                 catch (_: Exception) { continue }
             }
@@ -211,12 +240,16 @@ internal object GroupStore {
         }
     }
     suspend fun currentForSending(id: String): FamilyGroup {
-        var group = requireNotNull(find(id))
+        var group = requireNotNull(synchronized(this) { groups.firstOrNull { it.id == id } }) {
+            "Group is no longer active"
+        }
         if (group.owner != FamilyStore.deviceId) {
             val owner = requireNotNull(FamilyStore.find(group.owner))
             val latest = Tailnet.send(owner, "group_snapshot", JSONObject().put("groupId", id))
             withContext(Dispatchers.Main) { receiveUpdate(owner.id, latest) }
-            group = requireNotNull(find(id))
+            group = requireNotNull(synchronized(this) { groups.firstOrNull { it.id == id } }) {
+                "You have left this group"
+            }
         }
         require(FamilyStore.deviceId in group.members) { "You have left this group" }
         return group

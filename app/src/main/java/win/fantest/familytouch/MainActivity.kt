@@ -54,7 +54,6 @@ import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Contacts
-import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Send
@@ -195,7 +194,6 @@ class MainActivity : ComponentActivity() {
             isAppearanceLightStatusBars = false
             isAppearanceLightNavigationBars = false
         }
-        FamilyAppearance.init(this)
         FamilyStore.init(this)
         GroupStore.init(this)
         intent.getStringExtra("open_peer_id")?.let { id ->
@@ -214,18 +212,11 @@ class MainActivity : ComponentActivity() {
         if (!FamilyStore.needsNicknamePrompt) requestNotificationPermission()
         setContent {
             val palette = FamilyAppearance.tone
-            val scheme = if (FamilyAppearance.dark) darkColorScheme(
+            val scheme = darkColorScheme(
                 primary = palette.accent, onPrimary = palette.accentForeground,
                 background = palette.background, surface = palette.surface,
                 onBackground = palette.text, onSurface = palette.text,
                 secondary = palette.accent, secondaryContainer = palette.selected,
-                onSecondaryContainer = palette.text, surfaceContainer = palette.surface,
-                surfaceVariant = palette.control
-            ) else lightColorScheme(
-                primary = palette.accent, onPrimary = palette.accentForeground,
-                background = palette.background, surface = palette.surface,
-                onBackground = palette.text, onSurface = palette.text,
-                secondary = palette.accent, secondaryContainer = palette.sentBubble,
                 onSecondaryContainer = palette.text, surfaceContainer = palette.surface,
                 surfaceVariant = palette.control
             )
@@ -233,15 +224,25 @@ class MainActivity : ComponentActivity() {
                 window.statusBarColor = palette.surface.toArgb()
                 window.navigationBarColor = palette.background.toArgb()
                 androidx.core.view.WindowInsetsControllerCompat(window, window.decorView).apply {
-                    isAppearanceLightStatusBars = !FamilyAppearance.dark
-                    isAppearanceLightNavigationBars = !FamilyAppearance.dark
+                    isAppearanceLightStatusBars = false
+                    isAppearanceLightNavigationBars = false
                 }
             }
-            MaterialTheme(colorScheme = scheme) { Surface(modifier = Modifier.fillMaxSize(), color = bg, contentColor = ink) { Box { FamilyPinGate {
-                FamilyTouchUI(requestCallPermissions = { video, callback -> withCallPermissions(video, callback) },
-                    onNicknameFinished = { requestNotificationPermission() })
-                FamilyUpdatePrompt()
-            } } } }
+            MaterialTheme(colorScheme = scheme) {
+                Surface(modifier = Modifier.fillMaxSize(), color = bg, contentColor = ink) {
+                    Box {
+                        FamilyPinGate {
+                            FamilyTouchUI(
+                                requestCallPermissions = { video, callback -> withCallPermissions(video, callback) },
+                                onNicknameFinished = { requestNotificationPermission() }
+                            )
+                        }
+                        // Check the signed release feed every time the activity launches.
+                        // The updater's prompt is not blocked behind the local chat PIN.
+                        FamilyUpdatePrompt()
+                    }
+                }
+            }
         }
     }
 }
@@ -299,7 +300,10 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
             }
         }
     }
-    Column(Modifier.fillMaxSize().background(bg).navigationBarsPadding()) {
+    // Keep the conversation composer above the software keyboard. adjustResize alone
+    // does not guarantee this when edge-to-edge window insets are enabled (API 35+).
+    // Consumed insets prevent stacking the navigation-bar and keyboard heights.
+    Column(Modifier.fillMaxSize().background(bg).navigationBarsPadding().imePadding()) {
         Surface(color = surface, shadowElevation = 2.dp) {
             Row(Modifier.fillMaxWidth().statusBarsPadding()
                 .padding(horizontal = 8.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -408,10 +412,7 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
                         requestCallPermissions(video) { CallController.start(peer, video) }
                     }
                     2 -> ContactsPage(contacts, onOpen = { FamilyStore.selectedPeer = it; tab = 0 },
-                        onConnectionSettings = { tab = 4 })
-                    3 -> FamilyGlobePage(contacts, onOpen = {
-                        FamilyStore.selectedPeer = it; tab = 0
-                    })
+                        onConnectionSettings = { tab = 3 })
                     else -> SettingsPage(networkStatus, onRecordings = { recordingsLibrary = true })
                 }
             }
@@ -419,8 +420,7 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
                 val navItems = listOf(Triple("Chats", Icons.Outlined.ChatBubbleOutline, 0),
                     Triple("Calls", Icons.Outlined.Call, 1),
                     Triple("Contacts", Icons.Outlined.Contacts, 2),
-                    Triple("Globe", Icons.Outlined.Public, 3),
-                    Triple("Settings", Icons.Outlined.Settings, 4))
+                    Triple("Settings", Icons.Outlined.Settings, 3))
                 navItems.forEach { (label, icon, idx) ->
                     NavigationBarItem(selected = tab == idx, onClick = { tab = idx; FamilyStore.selectedPeer = null },
                         icon = {
@@ -797,10 +797,6 @@ private fun ContactsPage(peers: List<Peer>, onOpen: (String) -> Unit, onConnecti
                         fontSize = 11.sp, maxLines = 3)
                 }
             }
-            Spacer(Modifier.width(8.dp))
-            OutlinedButton(onClick = { doRefresh() }, enabled = !refreshing) {
-                Text(if (refreshing) "Refreshing…" else if (connected) "Refresh" else "Connect")
-            }
         }
         if (pingResult.isNotBlank()) Text(pingResult, color = accent, fontSize = 12.sp,
             modifier = Modifier.padding(horizontal = 18.dp, vertical = 4.dp))
@@ -846,7 +842,7 @@ private fun PeerRow(peer: Peer, subtitle: String, onClick: () -> Unit, unread: I
                 val state = FamilyStore.peerPresence[peer.id]
                 val presenceColor = when (state) {
                     "available" -> connectionGreen
-                    "on_call" -> Color(0xFF80B5FF)
+                    "on_call" -> Color(0xFF62BFA6)
                     "away" -> Color(0xFFFFCD75)
                     else -> Color(0xFF8998B8)
                 }
@@ -875,7 +871,7 @@ internal fun Avatar(name: String, photo: String? = null, avatarSize: androidx.co
             }
         } catch (_: Exception) { null }
     }
-    Box(Modifier.size(avatarSize).clip(CircleShape).background(Color(0xFF3C3375)),
+    Box(Modifier.size(avatarSize).clip(CircleShape).background(Color(0xFF245147)),
         contentAlignment = Alignment.Center) {
         if (decoded != null) Image(decoded, "Profile image", Modifier.fillMaxSize(),
             contentScale = ContentScale.Fit)
@@ -1020,7 +1016,52 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
     var locationBusy by remember { mutableStateOf(false) }
     var sendingMedia by remember { mutableStateOf(false) }
     var editGroup by remember(peer.id) { mutableStateOf(false) }
+    var confirmLeaveGroup by remember(peer.id) { mutableStateOf(false) }
+    var deleteLocalOnLeave by remember(peer.id) { mutableStateOf(false) }
+    var confirmDeleteGroup by remember(peer.id) { mutableStateOf(false) }
     if (editGroup && group != null) GroupEditor(group, onDismiss = { editGroup = false }, onSaved = { editGroup = false })
+    if (confirmLeaveGroup && group != null && group.owner != FamilyStore.deviceId) {
+        AlertDialog(onDismissRequest = { confirmLeaveGroup = false },
+            title = { Text("Leave " + group.title + "?") },
+            text = {
+                Column {
+                    Text("The creator must be reachable to revoke your membership. Local messages are kept unless you choose to remove them.")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = deleteLocalOnLeave, onCheckedChange = { deleteLocalOnLeave = it })
+                        Text("Also delete my local group messages", fontSize = 13.sp)
+                    }
+                }
+            },
+            confirmButton = { Button(onClick = {
+                confirmLeaveGroup = false
+                scope.launch {
+                    try {
+                        GroupStore.leave(group)
+                        if (deleteLocalOnLeave) FamilyStore.clearConversation(group.id)
+                        FamilyStore.selectedPeer = null
+                    } catch (e: Exception) {
+                        FamilyStore.lastError = "Unable to leave group: " + (e.message ?: "Creator unavailable")
+                    }
+                }
+            }) { Text("Leave group") } },
+            dismissButton = { TextButton(onClick = { confirmLeaveGroup = false }) { Text("Cancel") } })
+    }
+    if (confirmDeleteGroup && group != null && group.owner == FamilyStore.deviceId) {
+        AlertDialog(onDismissRequest = { confirmDeleteGroup = false },
+            title = { Text("Delete " + group.title + "?") },
+            text = { Text("This dissolves the group and notifies its members when connected. Local messages on this device will be deleted; other devices may retain copies. This cannot be undone.") },
+            confirmButton = { Button(onClick = {
+                try {
+                    GroupStore.deleteOwned(group)
+                    FamilyStore.clearConversation(group.id)
+                    FamilyStore.selectedPeer = null
+                    confirmDeleteGroup = false
+                } catch (e: Exception) { FamilyStore.lastError = "Unable to delete group: " + (e.message ?: "Unknown error") }
+            }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) {
+                Text("Delete group")
+            } },
+            dismissButton = { TextButton(onClick = { confirmDeleteGroup = false }) { Text("Cancel") } })
+    }
     var viewedMedia by remember(peer.id) { mutableStateOf<AttachmentTransport.Info?>(null) }
     viewedMedia?.let { ChatMediaViewer(it, onDismiss = { viewedMedia = null }) }
     var locationJob by remember(peer.id) { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -1191,14 +1232,18 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
                 placeholder = { Text("Search this conversation") }, singleLine = true)
             TextButton(onClick = { searching = false; query = "" }) { Text("Close") }
         }
-        if (group != null) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            TextButton(onClick = {
-                if (group.owner == FamilyStore.deviceId) editGroup = true
-                else scope.launch {
-                    try { GroupStore.leave(group); FamilyStore.selectedPeer = null }
-                    catch (_: Exception) { FamilyStore.lastError = "Creator unavailable; try leaving again later" }
+        if (group != null) Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+            horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+            if (group.owner == FamilyStore.deviceId) {
+                TextButton(onClick = { editGroup = true }) { Text("Members", color = accent) }
+                TextButton(onClick = { confirmDeleteGroup = true }) {
+                    Text("Delete group", color = Color(0xFFFF9A9A))
                 }
-            }) { Text(if (group.owner == FamilyStore.deviceId) "Members" else "Leave group", color = accent) }
+            } else {
+                TextButton(onClick = { confirmLeaveGroup = true }) {
+                    Text("Leave group", color = Color(0xFFFF9A9A))
+                }
+            }
         }
         val history = FamilyStore.messages.filter { it.peerId == peer.id && (query.isBlank() || it.text.contains(query, ignoreCase = true)) }
         val chatScroll = rememberLazyListState()
@@ -1411,6 +1456,22 @@ private fun Conversation(peer: Peer, menuAction: String?, onMenuHandled: () -> U
 }
 
 @Composable
+private fun FamilySettingsSection(
+    title: String,
+    description: String,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))
+        .background(cardSurface).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(title, color = ink, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+        Text(description, color = muted, fontSize = 12.sp, lineHeight = 17.sp)
+        HorizontalDivider(color = hairline, thickness = 0.5.dp)
+        content()
+    }
+}
+
+@Composable
 private fun SettingsPage(networkStatus: VpnConnectionStatus, onRecordings: () -> Unit) {
     val context = LocalContext.current
     var name by remember { mutableStateOf(FamilyStore.nickname) }
@@ -1450,48 +1511,62 @@ private fun SettingsPage(networkStatus: VpnConnectionStatus, onRecordings: () ->
             }
         } catch (e: Exception) { FamilyStore.lastError = "Picture selection failed: " + e.message }
     }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(17.dp)) {
-        Text("Your device", fontSize = 21.sp, fontWeight = FontWeight.Bold)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Avatar(FamilyStore.nickname, FamilyStore.profilePhoto)
-            Spacer(Modifier.width(12.dp))
-            OutlinedButton(onClick = { pickAvatar.launch("image/*") }) {
-                Text("Change profile picture")
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+        .padding(horizontal = 14.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Text("Settings", color = ink, fontSize = 25.sp, fontWeight = FontWeight.Bold)
+        Text("Manage your device, private connection, and family data.",
+            color = muted, fontSize = 13.sp)
+        FamilySettingsSection("Your profile", "Your name and photo are shared only with your paired family devices.") {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Avatar(FamilyStore.nickname, FamilyStore.profilePhoto)
+                Spacer(Modifier.width(12.dp))
+                OutlinedButton(onClick = { pickAvatar.launch("image/*") }) {
+                    Text("Change picture")
+                }
             }
+            OutlinedTextField(value = name, onValueChange = { name = it.take(36) },
+                label = { Text("Nickname") }, modifier = Modifier.fillMaxWidth(),
+                trailingIcon = { IconButton(onClick = { FamilyStore.rename(name) }) {
+                    Icon(Icons.Outlined.CheckCircle, "Save nickname", tint = accent)
+                } })
+            Text("Your identity is created automatically. No account or password is required.",
+                color = muted, fontSize = 12.sp)
         }
-        OutlinedTextField(value = name, onValueChange = { name = it.take(36) },
-            label = { Text("Nickname") }, modifier = Modifier.fillMaxWidth(),
-            trailingIcon = { IconButton(onClick = { FamilyStore.rename(name) }) {
-                Icon(Icons.Outlined.CheckCircle, "Save nickname", tint = accent)
-            } })
-        Text("Your identity is created automatically when this app is first installed. No account or password required.",
-            color = muted, fontSize = 12.sp)
-        HorizontalDivider(color = Color(0xFF24415C))
-        VpnSettings()
-        FamilyAppearanceSettings()
-        FamilyPinSettings()
-        OutlinedButton(onClick = {
-            try {
-                context.startActivity(Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
-                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
-                    .putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, "familytouch_status_silent_v3"))
-            } catch (_: Exception) {
-                context.startActivity(Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName))
-            }
-        }) { Text("Connection notification settings") }
-        Text("The private connection uses an Android foreground service. Its notification is minimized and silent; Android may still show a service indicator.",
-            color = muted, fontSize = 12.sp)
-        ChatBackupPanel()
-        OutlinedButton(onClick = onRecordings) { Text("Local call recordings") }
-        Text("App version", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = ink)
-        Text(FamilyVersionLabels.format(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE.toLong()),
-            color = accent, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-        Text("Installed release: " + BuildConfig.VERSION_NAME, color = muted, fontSize = 12.sp)
-        Button(onClick = { FamilyUpdates.checkNow() }, colors = ButtonDefaults.buttonColors(
-            containerColor = accent, contentColor = bg)) { Text("Check for updates") }
-        HorizontalDivider(color = Color(0xFF24415C))
-        Text("Family devices appear automatically after connecting. Messages stay on your devices.", color = muted, fontSize = 13.sp)
+        FamilySettingsSection("Private connection",
+            if (networkStatus.connected) "Connected to your private family network"
+            else "Connection unavailable — check your network settings") {
+            VpnSettings()
+        }
+        FamilySettingsSection("Privacy & security", "Protect conversations and control app notifications.") {
+            FamilyPinSettings()
+            OutlinedButton(onClick = {
+                try {
+                    context.startActivity(Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                        .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+                        .putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, "familytouch_status_silent_v3"))
+                } catch (_: Exception) {
+                    context.startActivity(Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName))
+                }
+            }) { Text("Connection notifications") }
+            Text("Android may still show an indicator for the silent private-connection service.",
+                color = muted, fontSize = 12.sp)
+        }
+        FamilySettingsSection("Chats & recordings", "Back up local conversations or review call recordings.") {
+            ChatBackupPanel()
+            OutlinedButton(onClick = onRecordings) { Text("Local call recordings") }
+        }
+        FamilySettingsSection("App & updates", "Check your installed version and available signed updates.") {
+            Text(FamilyVersionLabels.format(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE.toLong()),
+                color = accent, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Text("Installed release: " + BuildConfig.VERSION_NAME, color = muted, fontSize = 12.sp)
+            Button(onClick = { FamilyUpdates.checkNow() }, colors = ButtonDefaults.buttonColors(
+                containerColor = accent, contentColor = bg)) { Text("Check for updates") }
+        }
+        Text("Family devices appear automatically after connecting. Messages stay on your devices.",
+            color = muted, fontSize = 12.sp,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 8.dp))
     }
 }
 
@@ -1574,10 +1649,10 @@ private fun CallPage(call: CallInvite, onHangup: () -> Unit) {
         }
     } else {
         Column(Modifier.fillMaxSize().background(Brush.verticalGradient(
-                listOf(Color(0xFF0B1223), Color(0xFF1D2B50), Color(0xFF10182D)))),
+                listOf(Color(0xFF0B141A), Color(0xFF1D3432), Color(0xFF0B141A)))),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center) {
-            Box(Modifier.size(126.dp).background(Color(0xFF3C327B), CircleShape),
+            Box(Modifier.size(126.dp).background(Color(0xFF245147), CircleShape),
                 contentAlignment = Alignment.Center) {
                 Avatar(name, FamilyStore.peerPhotos[call.peerId], 104.dp)
             }
