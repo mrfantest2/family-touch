@@ -299,7 +299,10 @@ private fun FamilyTouchUI(requestCallPermissions: (Boolean, () -> Unit) -> Unit,
             }
         }
     }
-    Column(Modifier.fillMaxSize().background(bg).navigationBarsPadding()) {
+    // Keep the conversation composer above the software keyboard. adjustResize alone
+    // does not guarantee this when edge-to-edge window insets are enabled (API 35+).
+    // Consumed insets prevent stacking the navigation-bar and keyboard heights.
+    Column(Modifier.fillMaxSize().background(bg).navigationBarsPadding().imePadding()) {
         Surface(color = surface, shadowElevation = 2.dp) {
             Row(Modifier.fillMaxWidth().statusBarsPadding()
                 .padding(horizontal = 8.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
