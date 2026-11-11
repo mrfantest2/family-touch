@@ -1,8 +1,15 @@
 package win.fantest.familytouch
 
 import android.content.ActivityNotFoundException
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import androidx.core.app.NotificationCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
@@ -81,6 +88,94 @@ internal object FamilyUpdates {
         }
     } catch (_: Exception) { false }
 
+
+    private const val CONTROL_PREFS = "family_update_controls"
+    private const val PAUSED_CODE = "paused_code"
+    private const val SAVED_UPDATE = "saved_update"
+    const val ACTION_PAUSE = "win.fantest.familytouch.UPDATE_PAUSE"
+    const val ACTION_RESUME = "win.fantest.familytouch.UPDATE_RESUME"
+    private const val PAUSED_NOTIFICATION = 6404
+
+    /** Persist only verified-manifest metadata (never passwords, keys or private chat data). */
+    fun rememberUpdate(context: Context, update: AvailableFamilyUpdate) {
+        require(update.code > BuildConfig.VERSION_CODE && update.bytes in 1..250_000_000L)
+        require(update.checksum.matches(Regex("[0-9a-f]{64}")))
+        require(isAllowedDownloadUrl(update.url) && update.mirrors.all { isAllowedDownloadUrl(it) })
+        val data = JSONObject()
+            .put("versionCode", update.code).put("versionName", update.name)
+            .put("bytes", update.bytes).put("sha256", update.checksum)
+            .put("apkUrl", update.url)
+            .put("mirrors", org.json.JSONArray(update.mirrors))
+        context.getSharedPreferences(CONTROL_PREFS, Context.MODE_PRIVATE)
+            .edit().putString(SAVED_UPDATE, data.toString()).apply()
+    }
+
+    /** Revalidate cached metadata before accepting background notification actions. */
+    fun savedUpdate(context: Context): AvailableFamilyUpdate? = runCatching {
+        val text = context.getSharedPreferences(CONTROL_PREFS, Context.MODE_PRIVATE)
+            .getString(SAVED_UPDATE, null) ?: return@runCatching null
+        val data = JSONObject(text)
+        val mirrors = data.optJSONArray("mirrors")
+        val update = AvailableFamilyUpdate(
+            data.getLong("versionCode"), data.getString("versionName"),
+            data.getLong("bytes"), data.getString("sha256"), data.getString("apkUrl"),
+            (0 until (mirrors?.length() ?: 0)).map { mirrors!!.getString(it) }
+        )
+        require(update.code > BuildConfig.VERSION_CODE && update.bytes in 1..250_000_000L)
+        require(update.checksum.matches(Regex("[0-9a-f]{64}")))
+        require(isAllowedDownloadUrl(update.url) && update.mirrors.all { isAllowedDownloadUrl(it) })
+        update
+    }.getOrNull()
+
+    fun isPaused(context: Context, code: Long): Boolean =
+        context.getSharedPreferences(CONTROL_PREFS, Context.MODE_PRIVATE)
+            .getLong(PAUSED_CODE, -1L) == code
+
+    /** Cancellation stops active network I/O; the worker preserves complete ranged chunks. */
+    fun pause(context: Context, update: AvailableFamilyUpdate) {
+        rememberUpdate(context, update)
+        context.getSharedPreferences(CONTROL_PREFS, Context.MODE_PRIVATE)
+            .edit().putLong(PAUSED_CODE, update.code).commit()
+        WorkManager.getInstance(context.applicationContext).cancelUniqueWork(workName(update.code))
+        showPausedNotification(context, update)
+    }
+
+    /** Replaces only this version's cancelled job; unrelated work is unaffected. */
+    fun resume(context: Context, update: AvailableFamilyUpdate) {
+        rememberUpdate(context, update)
+        context.getSharedPreferences(CONTROL_PREFS, Context.MODE_PRIVATE)
+            .edit().remove(PAUSED_CODE).commit()
+        context.getSystemService(NotificationManager::class.java)?.cancel(PAUSED_NOTIFICATION)
+        enqueue(context, update, ExistingWorkPolicy.REPLACE)
+    }
+
+    private fun showPausedNotification(context: Context, update: AvailableFamilyUpdate) {
+        runCatching {
+            val manager = context.getSystemService(NotificationManager::class.java) ?: return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                manager.createNotificationChannel(NotificationChannel(
+                    FamilyUpdateWorker.CHANNEL, "Family Touch updates", NotificationManager.IMPORTANCE_LOW
+                ))
+            }
+            val open = PendingIntent.getActivity(context, 6404,
+                Intent(context, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            val resume = PendingIntent.getBroadcast(context, update.code.toInt(),
+                Intent(context, FamilyUpdateActionReceiver::class.java)
+                    .setAction(ACTION_RESUME).putExtra(FamilyUpdateWorker.KEY_VERSION, update.code),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            val note = NotificationCompat.Builder(context, FamilyUpdateWorker.CHANNEL)
+                .setSmallIcon(android.R.drawable.stat_sys_download)
+                .setContentTitle("Family Touch update paused")
+                .setContentText("Tap Resume to continue the verified download")
+                .setContentIntent(open)
+                .addAction(android.R.drawable.ic_media_play, "Resume", resume)
+                .setOngoing(false).setOnlyAlertOnce(true).build()
+            manager.notify(PAUSED_NOTIFICATION, note)
+        }
+    }
+
     fun workName(code: Long): String = "family-touch-update-" + code
 
     fun partialFile(context: Context, update: AvailableFamilyUpdate): File =
@@ -91,8 +186,10 @@ internal object FamilyUpdates {
         File(File(context.filesDir, "updates").also { it.mkdirs() },
             "family-touch-" + update.code + "-" + update.checksum.take(12) + ".apk")
 
-    fun enqueue(context: Context, update: AvailableFamilyUpdate) {
+    fun enqueue(context: Context, update: AvailableFamilyUpdate,
+                policy: ExistingWorkPolicy = ExistingWorkPolicy.KEEP) {
         require(isAllowedDownloadUrl(update.url) && update.mirrors.all { isAllowedDownloadUrl(it) })
+        rememberUpdate(context, update)
         val input = workDataOf(
             FamilyUpdateWorker.KEY_VERSION to update.code,
             FamilyUpdateWorker.KEY_NAME to update.name,
@@ -108,7 +205,7 @@ internal object FamilyUpdates {
             .addTag("family-touch-signed-updater")
             .build()
         WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(
-            workName(update.code), ExistingWorkPolicy.KEEP, request)
+            workName(update.code), policy, request)
     }
 
     fun markReady(context: Context, update: AvailableFamilyUpdate) {
@@ -191,8 +288,9 @@ internal object FamilyUpdates {
                 }
             }
         }
-        FamilyUpdateCheck(code, publishedName,
-            AvailableFamilyUpdate(code, publishedName, bytes, hash, url, mirrors))
+        val update = AvailableFamilyUpdate(code, publishedName, bytes, hash, url, mirrors)
+        rememberUpdate(context, update)
+        FamilyUpdateCheck(code, publishedName, update)
     }
     internal fun verifyPackageAndSigner(context: Context, file: File, version: Long) {
         signerDigest(context, file)
@@ -241,6 +339,18 @@ internal object FamilyUpdates {
 internal fun FamilyUpdatePrompt() {
     val context = LocalContext.current
     val trigger = FamilyUpdates.checkRequest
+    var resumeChecks by remember { mutableIntStateOf(0) }
+    var previousManualCheck by remember { mutableIntStateOf(trigger) }
+    // Checking on Activity RESUME also covers returning from another app without a new onCreate.
+    DisposableEffect(context) {
+        val activity = context as? androidx.activity.ComponentActivity
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) resumeChecks++
+        }
+        activity?.lifecycle?.addObserver(observer)
+        onDispose { activity?.lifecycle?.removeObserver(observer) }
+    }
+    var paused by remember { mutableStateOf(false) }
     var available by remember { mutableStateOf<AvailableFamilyUpdate?>(null) }
     var ready by remember { mutableStateOf<File?>(null) }
     var workInfo by remember { mutableStateOf<WorkInfo?>(null) }
@@ -249,21 +359,22 @@ internal fun FamilyUpdatePrompt() {
     var published by remember { mutableStateOf<FamilyUpdateCheck?>(null) }
     val installed = FamilyVersionLabels.format(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE.toLong())
 
-    LaunchedEffect(trigger) {
-        if (trigger > 0) {
-            showNoUpdate = false
-            error = ""
-            published = null
-        }
+    LaunchedEffect(trigger, resumeChecks) {
+        val manualCheck = trigger != previousManualCheck
+        previousManualCheck = trigger
+        if (trigger == 0 && resumeChecks == 0) return@LaunchedEffect
+        showNoUpdate = false
+        if (manualCheck) { error = ""; published = null }
         try {
             val check = FamilyUpdates.check(context)
             val candidate = check.update
             published = check
             available = candidate
+            paused = candidate?.let { FamilyUpdates.isPaused(context, it.code) } ?: false
             ready = if (candidate != null) FamilyUpdates.verifiedReady(context, candidate) else null
-            if (trigger > 0 && candidate == null) showNoUpdate = true
+            if (manualCheck && candidate == null) showNoUpdate = true
         } catch (e: Exception) {
-            if (trigger > 0) error = e.message ?: "Update check unavailable"
+            if (manualCheck) error = e.message ?: "Update check unavailable"
         }
     }
     DisposableEffect(available?.code, context) {
@@ -283,6 +394,7 @@ internal fun FamilyUpdatePrompt() {
     }
     LaunchedEffect(workInfo?.state) {
         val candidate = available
+        if (candidate != null) paused = FamilyUpdates.isPaused(context, candidate.code)
         if (candidate != null && workInfo?.state == WorkInfo.State.SUCCEEDED) {
             ready = FamilyUpdates.verifiedReady(context, candidate)
         }
@@ -309,10 +421,10 @@ internal fun FamilyUpdatePrompt() {
             }
         },
         confirmButton = { TextButton(onClick = { error = "" }) { Text("OK") } })
-    available?.let { candidate ->
+    if (error.isBlank()) available?.let { candidate ->
         val state = workInfo?.state
-        val running = state == WorkInfo.State.RUNNING ||
-            state == WorkInfo.State.ENQUEUED || state == WorkInfo.State.BLOCKED
+        val running = !paused && (state == WorkInfo.State.RUNNING ||
+            state == WorkInfo.State.ENQUEUED || state == WorkInfo.State.BLOCKED)
         val pct = workInfo?.progress?.getInt(FamilyUpdateWorker.KEY_PROGRESS, 0) ?: 0
         AlertDialog(onDismissRequest = { available = null },
             title = { Text(if (ready != null) "Verified update ready" else "New Family Touch update") },
@@ -321,7 +433,11 @@ internal fun FamilyUpdatePrompt() {
                     Text("Installed version: $installed")
                     Text("Available update: " +
                         FamilyVersionLabels.format(candidate.name, candidate.code))
-                    if (running) {
+                    if (paused) {
+                        LinearProgressIndicator(progress = { pct / 100f },
+                            modifier = Modifier.fillMaxWidth())
+                        Text("Paused at $pct%. Resume now, from a notification, or after reopening the app.")
+                    } else if (running) {
                         LinearProgressIndicator(progress = { pct / 100f },
                             modifier = Modifier.fillMaxWidth())
                         Text("Background download: $pct%. Safe to leave or lock the app.")
@@ -339,18 +455,48 @@ internal fun FamilyUpdatePrompt() {
                 }
             },
             confirmButton = {
-                TextButton(enabled = !running, onClick = {
-                    if (ready != null) {
-                        try { FamilyUpdates.install(context, ready!!) }
-                        catch (e: Exception) { error = e.message ?: "Cannot open Android installer" }
-                    } else {
-                        try { FamilyUpdates.enqueue(context, candidate) }
-                        catch (e: Exception) { error = e.message ?: "Cannot schedule update" }
+                TextButton(onClick = {
+                    try {
+                        when {
+                            ready != null -> FamilyUpdates.install(context, ready!!)
+                            paused -> {
+                                FamilyUpdates.resume(context, candidate)
+                                paused = false
+                                workInfo = null
+                            }
+                            running -> {
+                                FamilyUpdates.pause(context, candidate)
+                                paused = true
+                            }
+                            else -> FamilyUpdates.enqueue(context, candidate)
+                        }
+                    } catch (e: Exception) {
+                        error = e.message ?: "Cannot manage update"
                     }
-                }) { Text(if (ready != null) "Install update" else if (running) "Downloading…" else "Download in background") }
+                }) {
+                    Text(when {
+                        ready != null -> "Install update"
+                        paused -> "Resume download"
+                        running -> "Pause download"
+                        else -> "Download in background"
+                    })
+                }
             },
             dismissButton = {
                 TextButton(onClick = { available = null }) { Text("Close") }
             })
+    }
+}
+
+
+/** Explicit, non-exported receiver: paused updates can resume from notifications in background. */
+internal class FamilyUpdateActionReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        val update = FamilyUpdates.savedUpdate(context) ?: return
+        if (intent.getLongExtra(FamilyUpdateWorker.KEY_VERSION, -1L) != update.code) return
+        when (intent.action) {
+            FamilyUpdates.ACTION_PAUSE -> FamilyUpdates.pause(context, update)
+            FamilyUpdates.ACTION_RESUME -> FamilyUpdates.resume(context, update)
+        }
     }
 }

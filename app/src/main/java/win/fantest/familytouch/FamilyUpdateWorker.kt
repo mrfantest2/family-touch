@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import kotlinx.coroutines.CancellationException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -71,8 +72,17 @@ internal class FamilyUpdateWorker(
             .setOnlyAlertOnce(true)
             .setOngoing(!ready)
             .setContentIntent(pending)
-        if (!ready) builder.setProgress(100, percent.coerceIn(0, 100), false)
-        else builder.setAutoCancel(true).setSmallIcon(android.R.drawable.stat_sys_download_done)
+        if (!ready) {
+            builder.setProgress(100, percent.coerceIn(0, 100), false)
+            val version = inputData.getLong(KEY_VERSION, -1L)
+            if (version > 0) {
+                val pause = PendingIntent.getBroadcast(applicationContext, version.toInt(),
+                    Intent(applicationContext, FamilyUpdateActionReceiver::class.java)
+                        .setAction(FamilyUpdates.ACTION_PAUSE).putExtra(KEY_VERSION, version),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+                builder.addAction(android.R.drawable.ic_media_pause, "Pause", pause)
+            }
+        } else builder.setAutoCancel(true).setSmallIcon(android.R.drawable.stat_sys_download_done)
         return builder.build()
     }
 
@@ -95,6 +105,9 @@ internal class FamilyUpdateWorker(
         }
         val update = AvailableFamilyUpdate(version,
             inputData.getString(KEY_NAME).orEmpty(), size, checksum, sources.first(), sources.drop(1))
+        if (FamilyUpdates.isPaused(applicationContext, version)) {
+            return@withContext Result.success()
+        }
         val part = FamilyUpdates.partialFile(applicationContext, update)
         val finished = FamilyUpdates.targetFile(applicationContext, update)
         try {
@@ -107,11 +120,15 @@ internal class FamilyUpdateWorker(
             RandomAccessFile(part, "rw").use { it.setLength(offset) }
             setProgress(workDataOf(KEY_PROGRESS to ((offset * 100L / size).toInt())))
             while (offset < size) {
+                if (FamilyUpdates.isPaused(applicationContext, version))
+                    return@withContext Result.success()
                 if (isStopped) return@withContext Result.retry()
                 val end = minOf(size - 1, offset + CHUNK - 1)
                 var ok = false
                 var lastError = "Connection interrupted"
                 for (attempt in 0 until MAX_CHUNK_RETRIES) {
+                    if (FamilyUpdates.isPaused(applicationContext, version))
+                        return@withContext Result.success()
                     if (isStopped) return@withContext Result.retry()
                     val source = sources[attempt % sources.size]
                     try {
@@ -135,7 +152,9 @@ internal class FamilyUpdateWorker(
                                 val buf = ByteArray(65536)
                                 var written = 0L
                                 while (written < end - offset + 1) {
-                                    if (isStopped) throw IOException("Worker stopped")
+                                    if (FamilyUpdates.isPaused(applicationContext, version))
+                                        throw IOException("Worker paused")
+                                    if (isStopped) throw CancellationException("Worker stopped")
                                     val count = stream.read(buf, 0,
                                         minOf(buf.size.toLong(), end - offset + 1 - written).toInt())
                                     if (count < 0) break
@@ -193,10 +212,13 @@ internal class FamilyUpdateWorker(
                 return@withContext Result.retry()
             }
             if (!part.renameTo(finished)) return@withContext Result.retry()
+            if (FamilyUpdates.isPaused(applicationContext, version)) return@withContext Result.success()
             FamilyUpdates.markReady(applicationContext, update)
             applicationContext.getSystemService(NotificationManager::class.java)
                 .notify(COMPLETE_NOTIFICATION, notification(100, ready = true))
             Result.success(workDataOf(KEY_VERSION to version, KEY_PROGRESS to 100))
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             // Preserve the completed chunks across network errors, app crashes and device restarts.
             setProgress(workDataOf(KEY_ERROR to (e.message ?: "Update paused")))
