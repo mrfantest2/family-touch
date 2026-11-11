@@ -14,6 +14,11 @@ android {
         targetSdk = 36
         versionCode = 47
         versionName = "0.3.30-call-reliability"
+        // Explicit opt-in for smaller ARM64 QA transfers over slow remote ADB links.
+        // Normal CI and release builds retain the original multi-ABI packaging.
+        if (providers.gradleProperty("familyTouchQaArm64").orNull == "true") {
+            ndk { abiFilters.add("arm64-v8a") }
+        }
         buildConfigField("boolean", "EMBEDDED_VPN", "true")
         buildConfigField("boolean", "ADMIN_APP", "false")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
